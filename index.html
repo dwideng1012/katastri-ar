@@ -8,6 +8,7 @@
   Katastriüksuste piirid telefoni kaamerapildil. Üks fail, build-sammu ega väliseid teeke pole.
   Andmed: Maa- ja Ruumiameti WFS, kiht kataster:ky_kehtiv ("KÜ piirid"), GeoJSON, EPSG:4326.
   Sihtseade: Android + Chrome, HTTPS (nt GitHub Pages).
+  AR-lukk (nupp "Lukusta (AR)") vajab WebXR-i ja ARCore'i toega telefoni.
   Lauaarvutis proovimiseks: ?sim=58.6814,23.8456  (fikseeritud asukoht, vaadet saab hiirega lohistada)
 -->
 <style>
@@ -31,6 +32,10 @@
   input[type=range]{display:block;width:100%;height:30px;margin:0}
   output{float:right;font-family:ui-monospace,Menlo,Consolas,monospace}
   small{color:#bbb}
+  .aronly{display:none!important}
+  .ar .aronly{display:revert!important}
+  .ar .noar{display:none!important}
+  #bAR{background:#0b6bcb;border-color:#0b6bcb}
   #start{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:center;gap:14px;
     padding:24px;background:#101216;font-size:15px;line-height:1.45}
   #start h1{font-size:20px;margin:0}
@@ -47,23 +52,30 @@
 <div id="panel">
   <div class="row">
     <button id="bCal">Kalibreeri</button>
-    <button id="bReload">Lae andmed uuesti</button>
-    <button id="bAll"></button>
+    <button id="bReload" class="noar">Lae andmed uuesti</button>
+    <button id="bAll" class="noar"></button>
+    <button id="bAR" class="noar" hidden>Lukusta (AR)</button>
+    <button id="bLock" class="aronly">Lukusta punkt</button>
+    <button id="bRot" class="aronly">Pööra 2. punktile</button>
+    <button id="bRotL" class="aronly">⟲</button><button id="bRotR" class="aronly">⟳</button>
+    <button id="bUndo" class="aronly">Tagasi</button>
+    <button id="bExit" class="aronly">Välju</button>
   </div>
+  <div class="aronly"><small>Sihi rist päris piirimärgile maas ja vajuta "Lukusta punkt". Jooni saab ka sõrmega lohistada.</small></div>
   <div id="cal" hidden>
-    <label>Suuna parandus <small>(+ nihutab jooni vasakule)</small> <output id="oHdg"></output>
+    <label class="noar">Suuna parandus <small>(+ nihutab jooni vasakule)</small> <output id="oHdg"></output>
       <input id="rHdg" type="range" min="-20" max="20" step="0.5"></label>
-    <label>Kaamera vaatenurk, pildi pikem külg <output id="oFov"></output>
+    <label class="noar">Kaamera vaatenurk, pildi pikem külg <output id="oFov"></output>
       <input id="rFov" type="range" min="40" max="90" step="1"></label>
     <label>Kaamera kõrgus maapinnast <output id="oH"></output>
       <input id="rH" type="range" min="0.5" max="3" step="0.1"></label>
     <div class="row">
-      <span>Nihuta jooni 1 m:</span>
+      <span id="nLbl">Nihuta jooni 1 m:</span>
       <button data-n="l">←</button><button data-n="r">→</button>
       <button data-n="f">↑ kaugemale</button><button data-n="b">↓ lähemale</button>
-      <button id="bN0">Nulli</button>
+      <button id="bN0" class="noar">Nulli</button>
     </div>
-    <label class="chk"><input id="cDecl" type="checkbox"> Arvesta magnetilist deklinatsiooni (kompass → tõeline põhi)</label>
+    <label class="chk noar"><input id="cDecl" type="checkbox"> Arvesta magnetilist deklinatsiooni (kompass → tõeline põhi)</label>
   </div>
 </div>
 
@@ -111,7 +123,8 @@ const S = {
   simOri: null, sim: null,
   nudge: [0, 0],      // asukoha käsitsi nihe, m [ida, põhi]
   cal: { hdg: 0, fov: 65, h: 1.5, decl: true, all: false },
-  hdg: 0, here: null, hereGuess: false, near: null, xr: 'kontrollin…', errs: [], geoErr: '', lastT: 0, hudT: 0, fpx: 600
+  hdg: 0, here: null, hereGuess: false, near: null, nearV: null, xr: 'kontrollin…',
+  ar: null, arErr: '', camErr: '', P: null, raf: 0, oriT: -1e9, errs: [], geoErr: '', lastT: 0, hudT: 0, fpx: 600
 };
 try { Object.assign(S.cal, JSON.parse(localStorage.getItem('katasterAR.cal') || '{}')); } catch (e) {}
 function saveCal() { try { localStorage.setItem('katasterAR.cal', JSON.stringify(S.cal)); } catch (e) {} }
@@ -241,7 +254,9 @@ async function loadParcels() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const gj = await r.json();
     if (!gj || !Array.isArray(gj.features)) throw new Error('vastus ei ole GeoJSON');
+    const old = S.origin;
     S.feats = prepFeatures(gj, o); S.origin = o; S.fetchCenter = o;
+    if (S.ar && S.ar.aligned && old) { const d = toENU(old.lat, old.lon, o); S.ar.A[0] += d[0]; S.ar.A[1] += d[1]; S.ar.undo = []; }
     S.here = null; S.near = null;   // vana üksus kuulub eelmise päringu teljestikku
     S.truncated = gj.numberMatched > gj.features.length;
     S.fetchMs = Math.round(performance.now() - t0); S.fetchErr = '';
@@ -263,7 +278,7 @@ function onFix(lat, lon, acc, alt, altAcc) {
 }
 
 /* ---------- orientatsioon ---------- */
-function setOri(alpha, beta, gamma, abs, src) { S.ori = { alpha, beta, gamma }; S.oriAbs = abs; S.oriSrc = src; }
+function setOri(alpha, beta, gamma, abs, src) { S.ori = { alpha, beta, gamma }; S.oriAbs = abs; S.oriSrc = src; S.oriT = performance.now(); }
 function onAbs(e) {
   if (e.alpha == null || e.beta == null || e.gamma == null) return;
   S.gotAbs = true; setOri(e.alpha, e.beta, e.gamma, true, 'deviceorientationabsolute');
@@ -327,9 +342,169 @@ function seg(P, path, a, b, W, H) {   // lõik kaamera koordinaatides, lõigatak
 }
 
 /* ---------- joonistamine ---------- */
-function userENU() {
+function gpsENU() {
   const u = toENU(S.pos.lat, S.pos.lon, S.origin);
   return [u[0] + S.nudge[0], u[1] + S.nudge[1]];
+}
+function userENU() {   // AR-lukus tuleb asukoht kaamera jälgimisest, muidu GPS-ist
+  const a = S.ar;
+  return a && a.aligned && a.cam ? xrToENU(a.cam.pos.x, a.cam.pos.z) : gpsENU();
+}
+
+/* ---------- AR-lukk (WebXR, ARCore) ----------
+   Telefon jälgib oma liikumist kaamerapildi järgi; GPS-i ja kompassi kasutatakse ainult algjoonduseks.
+   Joondus = pöördenurk th (XR-teljestiku -Z telje kompassisuund) + üks punktipaar A (ida, põhi) <-> X (x, z).
+   Joonistatakse endiselt 2D-lõuendile (DOM overlay), projektsioon tuleb XR-kaamera maatriksitest. */
+function enuToXR(e, n) {
+  const a = S.ar, de = e - a.A[0], dn = n - a.A[1], c = Math.cos(a.th), s = Math.sin(a.th);
+  return [a.X[0] + de * c - dn * s, a.X[1] - de * s - dn * c];
+}
+function xrToENU(x, z) {
+  const a = S.ar, dx = x - a.X[0], dz = z - a.X[1], c = Math.cos(a.th), s = Math.sin(a.th);
+  return [a.A[0] + dx * c - dz * s, a.A[1] - dx * s - dz * c];
+}
+function mkProjAR(a, W, H, pe, pn) {
+  const m = a.cam.inv, p = a.cam.proj, cy = a.cam.pos.y;
+  return {
+    toCam(e, n, u) {   // (e, n) kasutaja suhtes, u kaamera kõrguse suhtes -> [paremale, üles, sügavus]
+      const w = enuToXR(pe + e, pn + n), x = w[0], y = cy + u, z = w[1];
+      return [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], -(m[2] * x + m[6] * y + m[10] * z + m[14])];
+    },
+    toPx(c) { return [W / 2 * (1 + p[0] * c[0] / c[2] - p[8]), H / 2 * (1 - p[5] * c[1] / c[2] + p[9])]; }
+  };
+}
+function rayGround(px, py) {   // ekraanipunkti kiir -> lõikepunkt eeldatud maapinnaga XR-teljestikus [x, y, z]
+  const a = S.ar; if (!a || !a.cam) return null;
+  const W = window.innerWidth, H = window.innerHeight, p = a.cam.proj, m = a.cam.m, o = a.cam.pos;
+  const r = (px / (W / 2) - 1 + p[8]) / p[0], u = (1 - py / (H / 2) + p[9]) / p[5];
+  const dx = m[0] * r + m[4] * u - m[8], dy = m[1] * r + m[5] * u - m[9], dz = m[2] * r + m[6] * u - m[10];
+  const gy = a.y0 - S.cal.h;
+  if (dy > -1e-3) return null;                       // kiir ei lähe allapoole
+  const t = (gy - o.y) / dy;
+  if (Math.hypot(dx * t, dz * t) > 40) return null;  // horisondi lähedal on tulemus kasutu
+  return [o.x + dx * t, gy, o.z + dz * t];
+}
+function nearestVertex(e, n, skip) {   // lähim piiripunkt kõigi laaditud üksuste seast: [ida, põhi, kaugus]
+  let best = null;
+  for (const f of S.feats) {
+    if (e < f.bb[0] - 25 || e > f.bb[2] + 25 || n < f.bb[1] - 25 || n > f.bb[3] + 25) continue;
+    for (const r of f.rings) for (let i = 1; i < r.length; i++) {
+      if (skip && Math.hypot(r[i][0] - skip[0], r[i][1] - skip[1]) < 0.5) continue;
+      const d = Math.hypot(r[i][0] - e, r[i][1] - n);
+      if (d < 25 && (!best || d < best[2])) best = [r[i][0], r[i][1], d];
+    }
+  }
+  return best;
+}
+function arUndoPush() {
+  const a = S.ar; a.undo.push({ th: a.th, A: a.A.slice(), X: a.X.slice(), y0: a.y0, locks: a.locks, resid: a.resid, ground: a.ground });
+  if (a.undo.length > 30) a.undo.shift();
+}
+function arLock() {   // lähim piiripunkt hüppab sihikule; suund jääb samaks
+  const a = S.ar; if (!a || !a.aligned || !a.ret) return;
+  const g = xrToENU(a.ret[0], a.ret[2]), v = nearestVertex(g[0], g[1]); if (!v) return;
+  arUndoPush();
+  a.A = [v[0], v[1]]; a.X = [a.ret[0], a.ret[2]];
+  if (a.hitP) { a.y0 = a.ret[1] + S.cal.h; a.ground = 'tuvastatud'; }
+  a.locks = 1; a.resid = 0;
+}
+function arRotate() {   // pööra ümber lukustatud punkti nii, et lähim teine piiripunkt jääb sihiku suunale
+  const a = S.ar; if (!a || !a.aligned || !a.ret || !a.locks) return;
+  const g = xrToENU(a.ret[0], a.ret[2]), v = nearestVertex(g[0], g[1], a.A); if (!v) return;
+  const dx = a.ret[0] - a.X[0], dz = a.ret[2] - a.X[1], de = v[0] - a.A[0], dn = v[1] - a.A[1];
+  if (Math.hypot(dx, dz) < 2 || Math.hypot(de, dn) < 2) return;   // liiga lähedal, suund tuleks ebatäpne
+  arUndoPush();
+  a.th = Math.atan2(de, dn) - Math.atan2(dx, -dz);
+  a.locks = 2; a.resid = Math.hypot(dx, dz) - Math.hypot(de, dn);
+}
+function arAlign(phi) {   // algjoondus: asukoht GPS-ist, suund kompassist
+  const a = S.ar; if (!S.pos || !S.origin) return;
+  const c = camera();   // uuendab S.hdg, kui kompassi andmed on olemas
+  a.th = (c ? c.hdg : S.hdg) - phi;
+  a.A = gpsENU(); a.X = [a.cam.pos.x, a.cam.pos.z]; a.y0 = a.cam.pos.y; a.aligned = true;
+}
+function xrFrame(t, fr) {
+  const a = S.ar; if (!a) return;
+  a.session.requestAnimationFrame(xrFrame);
+  const gl = a.gl, layer = a.session.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  const W = window.innerWidth, H = window.innerHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const pose = fr.getViewerPose(a.ref);
+  a.tracking = !!pose;
+  if (pose) {
+    const v = pose.views[0];
+    const tp = v.transform.position;   // koopiad, sest neid loetakse ka väljaspool kaadrit (lohistamine)
+    a.cam = { pos: { x: tp.x, y: tp.y, z: tp.z }, m: Float32Array.from(v.transform.matrix), inv: Float32Array.from(v.transform.inverse.matrix), proj: Float32Array.from(v.projectionMatrix) };
+    const m = a.cam.m, fx = -m[8], fz = -m[10];   // vaatesuund; otse alla vaadates võetakse telefoni ülaserva suund
+    a.phi = Math.hypot(fx, fz) > 0.35 ? Math.atan2(fx, -fz) : Math.atan2(m[4], -m[6]);
+    if (!a.aligned) arAlign(a.phi);
+    a.hdg = a.th + a.phi; S.hdg = a.hdg; S.fpx = a.cam.proj[0] * W / 2;
+    a.hitP = null;
+    if (a.hit) {
+      const r = fr.getHitTestResults(a.hit), hp = r.length ? r[0].getPose(a.ref) : null;
+      if (hp && hp.transform.matrix[5] > 0.8) { const q = hp.transform.position; a.hitP = { x: q.x, y: q.y, z: q.z }; }   // ainult rõhtsad pinnad
+    }
+    a.ret = a.hitP ? [a.hitP.x, a.hitP.y, a.hitP.z] : rayGround(W / 2, H / 2);
+  }
+  const tick = t - S.hudT > 250;
+  if (a.aligned && a.cam && S.origin) {
+    if (tick || S.here === null) locate();
+    draw(null, W, H); drawAim(W, H);
+  }
+  if (tick) { S.hudT = t; drawHud(null); drawRadar(a.aligned ? { hdg: a.hdg } : null, W); }
+}
+function drawAim(W, H) {   // sihik ekraani keskel ja joon piiripunktini, mille "Lukusta punkt" sinna tõstaks
+  const a = S.ar, cx = W / 2, cy = H / 2;
+  if (a.ret && S.P) {
+    const g = xrToENU(a.ret[0], a.ret[2]), v = nearestVertex(g[0], g[1], a.locks ? a.A : null) || nearestVertex(g[0], g[1]);
+    if (v) {
+      const [pe, pn] = userENU(), c = S.P.toCam(v[0] - pe, v[1] - pn, a.y0 - S.cal.h - a.cam.pos.y);
+      if (c[2] > 0.3) {
+        const p = S.P.toPx(c);
+        ctx.setLineDash([6, 5]); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p[0], p[1]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      ctx.font = '600 13px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const txt = (a.locks ? '2. punkt ' : 'lukustatav punkt ') + fmtM(v[2]), w = ctx.measureText(txt).width + 12;
+      ctx.fillStyle = 'rgba(0,0,0,.72)'; ctx.fillRect(cx - w / 2, cy + 20, w, 22); ctx.fillStyle = '#fff'; ctx.fillText(txt, cx, cy + 31);
+    }
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(cx - 14, cy); ctx.lineTo(cx + 14, cy); ctx.moveTo(cx, cy - 14); ctx.lineTo(cx, cy + 14); ctx.stroke();
+  ctx.strokeStyle = a.ret ? '#fff' : '#ff7b7b'; ctx.lineWidth = 2; ctx.stroke();
+}
+async function startAR() {
+  if (S.ar || !navigator.xr) return;
+  stopCamera();   // ARCore vajab kaamerat endale
+  let session = null;
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['dom-overlay', 'hit-test'], domOverlay: { root: document.body } });
+    if (!session.domOverlayState) throw new Error('brauser ei toeta DOM overlay\'d');
+    const gl = document.createElement('canvas').getContext('webgl', { xrCompatible: true });
+    if (!gl) throw new Error('WebGL puudub');
+    session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+    const ref = await session.requestReferenceSpace('local');
+    let hit = null;
+    try { hit = await session.requestHitTestSource({ space: await session.requestReferenceSpace('viewer') }); } catch (e) {}
+    S.ar = { session, gl, ref, hit, aligned: false, th: 0, A: [0, 0], X: [0, 0], y0: 0, cam: null, phi: 0, hdg: 0, ret: null, hitP: null,
+             locks: 0, resid: 0, ground: 'eeldatud', tracking: false, undo: [], drag: null, moved: false };
+    S.arErr = ''; S.here = null;
+    document.body.classList.add('ar'); $('nLbl').textContent = 'Nihuta jooni 10 cm:';
+    session.addEventListener('end', endAR);
+    session.requestAnimationFrame(xrFrame);
+  } catch (e) {
+    S.arErr = 'AR ei käivitunud: ' + (e.message || e.name);
+    if (session) session.end().catch(() => {});
+    startCamera();
+  }
+}
+function endAR() {
+  if (!S.ar) return;
+  S.ar = null; S.here = null;
+  document.body.classList.remove('ar'); $('nLbl').textContent = 'Nihuta jooni 1 m:';
+  startCamera();
+  cancelAnimationFrame(S.raf); S.raf = requestAnimationFrame(frame);
 }
 const fmtM = d => (d < 20 ? d.toFixed(1).replace('.', ',') : String(Math.round(d))) + ' m';
 function locate() {   // millisel üksusel seisad ja kui kaugel on selle lähim piir
@@ -344,11 +519,14 @@ function locate() {   // millisel üksusel seisad ja kui kaugel on selle lähim 
   }
   if (here && !here.stubs) here.stubs = buildStubs(here);
   S.here = here; S.hereGuess = guess; S.near = here ? boundaryDist(here, pe, pn) : null;
+  S.nearV = nearestVertex(pe, pn);
 }
 function draw(cam, W, H) {
-  const [pe, pn] = userENU(), ground = -S.cal.h;     // maapind eeldatakse tasaseks, kaamerast h meetrit allpool
-  S.fpx = focalPx(W, H);
-  const P = mkProj(cam.R, W, H, S.fpx, screenAngle());
+  const ar = S.ar && S.ar.aligned ? S.ar : null, [pe, pn] = userENU();
+  // maapind eeldatakse tasaseks: tavavaates h meetrit kaamerast allpool, AR-lukus kindlal kõrgusel
+  const ground = ar ? ar.y0 - S.cal.h - ar.cam.pos.y : -S.cal.h;
+  if (!ar) S.fpx = focalPx(W, H);
+  const P = S.P = ar ? mkProjAR(ar, W, H, pe, pn) : mkProj(cam.R, W, H, S.fpx, screenAngle());
   const here = S.here, showAll = S.cal.all;
   const other = new Path2D(), mine = new Path2D(), posts = new Path2D();
   const vtx = [], cen = [];
@@ -364,7 +542,7 @@ function draw(cam, W, H) {
         if (i > 0 && d < CFG.postDist) {
           const top = P.toCam(e, n, ground + 1);
           seg(P, posts, c, top, W, H);
-          if (isMine) vtx.push({ d, c: top });
+          if (isMine) vtx.push({ d, top, base: c });
         }
         pc = c; pE = e; pN = n;
       }
@@ -400,9 +578,12 @@ function draw(cam, W, H) {
   let count = 0;
   for (const V of vtx) {
     if (count >= CFG.maxVtxLabels) break;
-    if (V.c[2] < 1) continue;
-    const p = P.toPx(V.c); if (p[0] < 0 || p[0] > W || p[1] < 0 || p[1] > H) continue;
-    if (box(p[0], p[1] - 14, [[fmtM(V.d), '#fff']], 'rgba(120,30,10,.85)')) count++;
+    let p = null;   // silt posti otsa; kui see jääb kaadrist välja (punkt on väga lähedal), siis posti jalamile
+    for (const c of [V.top, V.base]) {
+      if (c[2] < 0.2) continue;
+      const q = P.toPx(c); if (q[0] >= 0 && q[0] <= W && q[1] >= 24 && q[1] <= H) { p = q; break; }
+    }
+    if (p && box(p[0], p[1] - 14, [[fmtM(V.d), '#fff']], 'rgba(120,30,10,.85)')) count++;
   }
   // vaates "kõik üksused": katastritunnused tsentroidides
   cen.sort((a, b) => a.d - b.d); count = 0;
@@ -450,14 +631,25 @@ function drawRadar(cam, W) {   // pealtvaade, vaatesuund üleval
 }
 function drawHud(cam) {
   const L = [], add = (t, c) => L.push([t, c]), f = S.fix, sg = v => (v >= 0 ? '+' : '') + v.toFixed(1);
-  if (!f) add(S.geoErr || 'GPS: ootan asukohta…', 'w');
+  const a = S.ar;
+  if (a) {
+    add('AR-LUKK  ' + (a.tracking ? 'jälgimine OK' : 'jälgimine kadunud: liiguta telefoni aeglaselt'), a.tracking ? '' : 'e');
+    if (!a.aligned) add('Ootan asukohta ja kaamerat…', 'w');
+    else if (a.locks === 2) add('Joondus: 2 punkti, kauguste vahe ' + sg(a.resid) + ' m', Math.abs(a.resid) > 0.5 ? 'w' : '');
+    else if (a.locks === 1) add('Joondus: 1 punkt, suund kompassist', 'w');
+    else add('Joondus: GPS + kompass. Lukusta punkt!', 'w');
+    add('Maapind: ' + (a.ground === 'tuvastatud' ? 'tuvastatud' : 'eeldatud, ' + S.cal.h.toFixed(1) + ' m kaamerast allpool'));
+  }
+  if (a) { if (f) add('GPS täpsus ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m (ei kasutata)'); }
+  else if (!f) add(S.geoErr || 'GPS: ootan asukohta…', 'w');
   else {
     add('GPS täpsus ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m' + (S.sim ? '  [SIMULATSIOON]' : '  vanus ' + Math.round((Date.now() - f.t) / 1000) + ' s'),
         f.acc > 10 ? 'w' : '');
     add(f.lat.toFixed(6) + ', ' + f.lon.toFixed(6) + (f.alt != null ? '  kõrgus ' + f.alt.toFixed(0) + ' m (ei kasutata)' : ''));
     if (S.geoErr) add(S.geoErr, 'w');
   }
-  if (!cam) add('Kompass: andmeid ei tule', 'e');
+  if (a) { /* AR-lukus kompassi ei kasutata */ }
+  else if (!cam) add('Kompass: andmeid ei tule', 'e');
   else {
     add('Suund ' + (((cam.hdg * R2D) % 360 + 360) % 360).toFixed(0) + '°  kalle ' + String(Math.round(cam.pitch * R2D)) + '°');
     add('  dekl ' + sg(cam.decl) + '°  parandus ' + sg(S.cal.hdg) + '°');
@@ -470,14 +662,18 @@ function drawHud(cam) {
   if (S.here) {
     add((S.hereGuess ? 'Sa ei asu ühelgi laaditud üksusel. Lähim: ' : 'Seisad üksusel ') + S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), S.hereGuess ? 'w' : '');
     if (S.near) add('Lähim piir ' + fmtM(S.near[0]) + (S.hereGuess ? '' : '  (valge joon minikaardil)'));
+    if (S.nearV) add('Lähim piiripunkt ' + fmtM(S.nearV[2]));
   }
-  if (S.nudge[0] || S.nudge[1]) add('Asukoha nihe: ida ' + sg(S.nudge[0]) + ' m, põhi ' + sg(S.nudge[1]) + ' m', 'w');
-  add('WebXR AR: ' + S.xr);
+  if (!a && (S.nudge[0] || S.nudge[1])) add('Asukoha nihe: ida ' + sg(S.nudge[0]) + ' m, põhi ' + sg(S.nudge[1]) + ' m', 'w');
+  if (!a) add('WebXR AR: ' + S.xr);
+  if (S.arErr) add(S.arErr, 'e');
+  if (S.camErr && !a) add(S.camErr, 'e');
   for (const e of S.errs) add(e, 'e');
   hud.replaceChildren(...L.map(([t, c]) => { const d = document.createElement('div'); d.textContent = t; if (c) d.className = c; return d; }));
 }
 function frame(t) {
-  requestAnimationFrame(frame);
+  S.raf = requestAnimationFrame(frame);
+  if (S.ar) return;   // AR-lukus joonistab xrFrame
   const W = window.innerWidth, H = window.innerHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
   if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
@@ -495,6 +691,16 @@ function frame(t) {
 }
 
 /* ---------- käivitamine ja juhtnupud ---------- */
+function startCamera() {
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return void (S.camErr = 'Kaamera API puudub.');
+  navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } })
+    .then(st => { S.camErr = ''; video.srcObject = st; return video.play(); })
+    .catch(e => { S.camErr = 'Kaamera: ' + (e.message || e.name); });
+}
+function stopCamera() {
+  const st = video.srcObject; if (st) st.getTracks().forEach(t => t.stop());
+  video.srcObject = null;
+}
 function start() {
   $('start').hidden = true;
   if (!window.isSecureContext) S.errs.push('Leht ei ole HTTPS-il: kaamera, GPS ja andurid ei tööta.');
@@ -508,11 +714,7 @@ function start() {
     window.addEventListener('deviceorientation', onRel);
   });
 
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } })
-      .then(st => { video.srcObject = st; return video.play(); })
-      .catch(e => S.errs.push('Kaamera: ' + (e.message || e.name)));
-  } else S.errs.push('Kaamera API puudub.');
+  startCamera();
 
   if (S.sim) onFix(S.sim[0], S.sim[1], 0, null, null);
   else if (navigator.geolocation) navigator.geolocation.watchPosition(
@@ -523,23 +725,48 @@ function start() {
 
   // Kas telefon toetab WebXR AR-i (ARCore)? Ainult info: seda oleks vaja joonte maailma külge lukustamiseks.
   if (navigator.xr && navigator.xr.isSessionSupported) navigator.xr.isSessionSupported('immersive-ar')
-    .then(ok => { S.xr = ok ? 'toetatud' : 'ei ole toetatud'; }, () => { S.xr = 'ei ole toetatud'; });
+    .then(ok => { S.xr = ok ? 'toetatud' : 'ei ole toetatud'; $('bAR').hidden = !ok; }, () => { S.xr = 'ei ole toetatud'; });
   else S.xr = 'API puudub';
 
   const wake = () => { if (navigator.wakeLock && document.visibilityState === 'visible') navigator.wakeLock.request('screen').catch(() => {}); };
   wake(); document.addEventListener('visibilitychange', wake);
-  requestAnimationFrame(frame);
+  S.raf = requestAnimationFrame(frame);
 }
 $('bStart').addEventListener('click', start);
 $('bCal').addEventListener('click', () => { $('cal').hidden = !$('cal').hidden; });
 $('bReload').addEventListener('click', () => { loadParcels(); });
-$('bN0').addEventListener('click', () => { S.nudge = [0, 0]; });
+$('bN0').addEventListener('click', () => { if (!S.ar) S.nudge = [0, 0]; });
+$('bAR').addEventListener('click', startAR);
+$('bExit').addEventListener('click', () => { if (S.ar) S.ar.session.end(); });
+$('bLock').addEventListener('click', arLock);
+$('bRot').addEventListener('click', arRotate);
+$('bRotL').addEventListener('click', () => { const a = S.ar; if (a && a.aligned) { arUndoPush(); a.th += 0.5 * D2R; } });
+$('bRotR').addEventListener('click', () => { const a = S.ar; if (a && a.aligned) { arUndoPush(); a.th -= 0.5 * D2R; } });
+$('bUndo').addEventListener('click', () => { const a = S.ar, u = a && a.undo.pop(); if (u) Object.assign(a, u); });
+// AR-lukus saab jooni sõrmega mööda maad lohistada
+cv.addEventListener('pointerdown', e => { const a = S.ar; if (a && a.aligned) { a.drag = [e.clientX, e.clientY]; a.moved = false; } });
+cv.addEventListener('pointermove', e => {
+  const a = S.ar; if (!a || !a.drag) return;
+  const g0 = rayGround(a.drag[0], a.drag[1]), g1 = rayGround(e.clientX, e.clientY);
+  a.drag = [e.clientX, e.clientY];
+  if (!g0 || !g1) return;
+  if (!a.moved) { arUndoPush(); a.moved = true; }
+  a.X[0] += g1[0] - g0[0]; a.X[1] += g1[2] - g0[2];
+});
+for (const ev of ['pointerup', 'pointercancel']) window.addEventListener(ev, () => { if (S.ar) S.ar.drag = null; });
 function showAllBtn() { $('bAll').textContent = 'Kõik üksused: ' + (S.cal.all ? 'jah' : 'ei'); }
 $('bAll').addEventListener('click', () => { S.cal.all = !S.cal.all; saveCal(); showAllBtn(); });
 showAllBtn();
 document.querySelectorAll('[data-n]').forEach(b => b.addEventListener('click', () => {
   // Nupud nihutavad jooni ekraanil; asukoht liigub vastassuunas.
-  const h = S.hdg, fw = [Math.sin(h), Math.cos(h)], rt = [Math.cos(h), -Math.sin(h)], k = b.dataset.n;
+  const k = b.dataset.n, a = S.ar;
+  if (a) {   // AR-lukus liiguvad jooned ise, 10 cm kaupa, vaatesuuna suhtes
+    if (!a.aligned) return;
+    const f = [Math.sin(a.phi), -Math.cos(a.phi)], r = [Math.cos(a.phi), Math.sin(a.phi)];
+    const d = k === 'l' ? [-r[0], -r[1]] : k === 'r' ? r : k === 'f' ? f : [-f[0], -f[1]];
+    arUndoPush(); a.X[0] += d[0] * 0.1; a.X[1] += d[1] * 0.1; return;
+  }
+  const h = S.hdg, fw = [Math.sin(h), Math.cos(h)], rt = [Math.cos(h), -Math.sin(h)];
   const v = k === 'l' ? rt : k === 'r' ? [-rt[0], -rt[1]] : k === 'f' ? [-fw[0], -fw[1]] : fw;
   S.nudge = [S.nudge[0] + v[0], S.nudge[1] + v[1]];
 }));
