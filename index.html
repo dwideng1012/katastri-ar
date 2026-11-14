@@ -18,7 +18,7 @@
   #cam,#ar{position:fixed;inset:0;width:100%;height:100%}
   #cam{object-fit:cover;background:#16181c}
   #ar{touch-action:none}
-  #hud{position:fixed;left:0;top:0;padding:6px 8px;max-width:calc(100% - 160px);pointer-events:none;
+  #hud{position:fixed;left:0;top:0;padding:6px 8px;max-width:calc(100% - 160px);
     font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;background:rgba(0,0,0,.6);border-bottom-right-radius:8px}
   #hud .w{color:#ffd24a} #hud .e{color:#ff7b7b}
   #radar{position:fixed;right:6px;top:6px;width:130px;height:130px;border-radius:50%;pointer-events:none}
@@ -127,7 +127,7 @@
 const CFG = {
   wfs: 'https://gsavalik.envir.ee/geoserver/kataster/wfs',
   layer: 'kataster:ky_kehtiv',                 // GetCapabilities: "KÜ piirid"
-  props: 'tunnus,l_aadress,siht1,pindala,geom',
+  props: 'tunnus,l_aadress,omvorm,siht1,pindala,geom',
   ptLayer: 'kataster:ky_punktid_kehtiv',       // piiripunktid: märgi liik, mõõdistamisviis, punkti number
   maxPoints: 5000,
   maxPtLabels: 4,     // mitmele lähimale piiripunktile kirjutatakse kaamerapildil silt (lisaks sihtpunktile)
@@ -311,7 +311,7 @@ function prepFeatures(gj, o) {
     });
     if (!rings.length || !best) continue;
     const p = f.properties || {};
-    out.push({ id: String(p.tunnus || f.id || '?'), addr: p.l_aadress || '', rings, bb, c: [best[0], best[1]], stubs: null });
+    out.push({ id: String(p.tunnus || f.id || '?'), addr: p.l_aadress || '', own: p.omvorm || '', rings, bb, c: [best[0], best[1]], stubs: null });
   }
   return out;
 }
@@ -914,7 +914,7 @@ function drawHud(cam) {
   if (S.ptErr) add(S.ptErr, 'e');
   if (S.fetchErr) add(S.fetchErr, 'e');
   if (S.here) {
-    add((S.hereGuess ? 'Sa ei asu ühelgi laaditud üksusel. Lähim: ' : 'Seisad üksusel ') + S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), S.hereGuess ? 'w' : '');
+    add((S.hereGuess ? 'Sa ei asu ühelgi laaditud üksusel. Lähim: ' : 'Seisad üksusel ') + S.here.id + (S.here.addr ? ' ' + S.here.addr : '') + (S.here.own ? ' · ' + S.here.own : ''), S.hereGuess ? 'w' : '');
     if (S.near) add('Lähim piir ' + fmtM(S.near[0]));
   }
   if (S.nearP) add('Lähim piiripunkt ' + fmtM(S.nearP.d) + ' (' + nice(MARK, S.nearP.mark) + ')');
@@ -931,6 +931,11 @@ function drawHud(cam) {
       const u = userAbs();
       rows.push(['X ' + u[1].toFixed(1).replace('.', ',') + '  Y ' + u[0].toFixed(1).replace('.', ',') + '  ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m', f.acc > 10 ? 'w' : '']);
       if (S.geoErr) rows.push([S.geoErr, 'w']);
+      if (S.here && !S.hereGuess) {
+        rows.push([S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), '']);
+        rows.push([S.here.own || 'omandivorm teadmata', '']);
+      } else if (S.here) rows.push(['Ei asu ühelgi üksusel. Lähim: ' + S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), 'w']);
+      else if (S.fetchCenter && !S.loading) rows.push(['Ei asu ühelgi üksusel', 'w']);
     } else rows.push([S.geoErr || 'GPS: ootan asukohta…', 'w']);
     for (const r of L) if (r[1] === 'e') rows.push(r);
   }
@@ -1063,6 +1068,8 @@ if (!(S.cal.avgN >= 3 && S.cal.avgN <= 30)) S.cal.avgN = 10;
 bindRange('rAvgN', 'oAvgN', 'avgN', v => String(v));
 $('cDbg').checked = !!S.cal.debug;
 $('cDbg').addEventListener('change', () => { S.cal.debug = $('cDbg').checked; saveCal(); S.hudT = -1e9; });
+// asukohapaneelile vajutus avab ja sulgeb silumisinfo
+hud.addEventListener('click', () => { S.cal.debug = !S.cal.debug; $('cDbg').checked = S.cal.debug; saveCal(); S.hudT = -1e9; });
 $('cDecl').checked = !!S.cal.decl;
 $('cDecl').addEventListener('change', () => { S.cal.decl = $('cDecl').checked; saveCal(); });
 
