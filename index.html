@@ -139,6 +139,8 @@ const CFG = {
   calMaxDist: 100,    // m kalibreerimiskohast, pärast seda läheb paranduse märk kollaseks (samuti oletus)      // ms ilma liikumiseta, enne kui asukohta hakatakse keskmistama
   arLock: false,      // AR-lukk (WebXR) on välja lülitatud; true toob nupu "Lukusta (AR)" tagasi
   radius: 200,        // m, BBOX poolkülg asukoha ümber
+  radiusWide: 600,    // m, hõreda asustusega kohas: kui 200 m sees on alla minPoints piiripunkti, küsitakse laiemalt
+  minPoints: 5,
   refetchDist: 80,    // m, kui kaugele liikudes andmed uuesti küsitakse
   maxFeatures: 1000,
   maxDraw: 250,       // m, kaugemaid piirilõike ei joonistata
@@ -160,6 +162,12 @@ const METHOD = { MOODISTATUD_L_EST: 'mõõdistatud (L-EST)', MOODISTATUD_TRANSFO
   KAARDI_JA_PLAANI_ALUSEL: 'kaardi ja plaani alusel', KONVERTEERITUD_L_EST: 'konverteeritud (L-EST)',
   KONVERTEERITUD_TRANSFORMEERITUD: 'konverteeritud, transformeeritud', KONVERTEERITUD_KAARDILT: 'konverteeritud kaardilt' };
 const nice = (dict, v) => dict[v] || String(v == null || v === '' ? 'teadmata' : v).toLowerCase().replace(/_/g, ' ');
+// Omandivormi värvid on võetud Maa- ja Ruumiameti teemakaardi legendilt.
+function ownColor(v) {
+  v = String(v || '').toLowerCase();
+  return v.includes('kinnistamata') ? '#fd9fd2' : v.includes('era') ? '#ca9fd2' : v.includes('riigi') ? '#fded98'
+    : v.includes('munitsipaal') ? '#fd8e65' : v.includes('avalik') ? '#98fdfd' : v.includes('sega') ? '#f4f4f4' : '#9aa0a6';
+}
 // Koordinaadi päritolu klass: 0 mõõdistatud, 1 konverteeritud, 2 kaardilt
 const ptClass = m => /^MOODISTATUD/.test(String(m)) ? 0 : /KAARDI/.test(String(m)) ? 2 : 1;
 const PT_COL = ['#ff5a36', '#ffb000', '#b9bec6'], PT_BG = ['rgba(120,30,10,.88)', 'rgba(110,75,0,.88)', 'rgba(60,64,70,.88)'];
@@ -338,23 +346,29 @@ function prepPoints(gj, o) {
 async function loadParcels() {
   const p = S.fix; if (!p || S.loading) return;
   S.loading = true; S.lastTry = performance.now();
-  const o = { E: p.E, N: p.N }, r = CFG.radius;
-  // BBOX ja vastus on L-EST97-s, telgede järjekord ida,põhi (kontrollitud päris teenusega).
-  const bbox = [o.E - r, o.N - r, o.E + r, o.N + r].map(v => v.toFixed(1)).join(',');
-  const q = (layer, count, props) => CFG.wfs + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + layer +
-    '&srsName=EPSG:3301&outputFormat=application/json&count=' + count + (props ? '&propertyName=' + props : '') + '&bbox=' + bbox + ',EPSG:3301';
-  const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 15000), t0 = performance.now();
-  const get = u => fetch(u, { signal: ac.signal }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(g => { if (!g || !Array.isArray(g.features)) throw new Error('vastus ei ole GeoJSON'); return g; });
+  const o = { E: p.E, N: p.N }, t0 = performance.now();
   const why = e => e.name === 'AbortError' ? 'WFS ei vastanud 15 sekundiga'
     : e.name === 'TypeError' ? 'päring ei läinud läbi: võrk puudub või CORS blokeerib (' + e.message + ')' : (e.message || String(e));
-  const [polys, points] = await Promise.allSettled([get(q(CFG.layer, CFG.maxFeatures, CFG.props)), get(q(CFG.ptLayer, CFG.maxPoints))]);
-  clearTimeout(timer);
+  let polys, points, pts = [];
+  for (const r of [CFG.radius, CFG.radiusWide]) {
+    // BBOX ja vastus on L-EST97-s, telgede järjekord ida,põhi (kontrollitud päris teenusega).
+    const bbox = [o.E - r, o.N - r, o.E + r, o.N + r].map(v => v.toFixed(1)).join(',');
+    const q = (layer, count, props) => CFG.wfs + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + layer +
+      '&srsName=EPSG:3301&outputFormat=application/json&count=' + count + (props ? '&propertyName=' + props : '') + '&bbox=' + bbox + ',EPSG:3301';
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 15000);
+    const get = u => fetch(u, { signal: ac.signal }).then(x => { if (!x.ok) throw new Error('HTTP ' + x.status); return x.json(); })
+      .then(g => { if (!g || !Array.isArray(g.features)) throw new Error('vastus ei ole GeoJSON'); return g; });
+    [polys, points] = await Promise.allSettled([get(q(CFG.layer, CFG.maxFeatures, CFG.props)), get(q(CFG.ptLayer, CFG.maxPoints))]);
+    clearTimeout(timer);
+    if (points.status !== 'fulfilled') break;
+    pts = prepPoints(points.value, o); S.fetchR = r;
+    if (pts.length >= CFG.minPoints) break;   // piisavalt punkte; muidu proovitakse laiemat ala (maal on üksused suured)
+  }
   if (polys.status === 'fulfilled' || points.status === 'fulfilled') {
     const old = S.origin;
     S.origin = o; S.fetchCenter = o; S.fetchMs = Math.round(performance.now() - t0);
     S.feats = polys.status === 'fulfilled' ? prepFeatures(polys.value, o) : [];
-    S.pts = points.status === 'fulfilled' ? prepPoints(points.value, o) : [];
+    S.pts = pts;
     S.truncated = (polys.status === 'fulfilled' && polys.value.numberMatched > polys.value.features.length) ||
                   (points.status === 'fulfilled' && points.value.numberMatched > points.value.features.length);
     if (S.ar && S.ar.aligned && old) { S.ar.A[0] += old.E - o.E; S.ar.A[1] += old.N - o.N; S.ar.undo = []; }
@@ -847,11 +861,16 @@ function drawRadar(cam, W) {   // pealtvaade, vaatesuund üleval
   const [pe, pn] = userENU(), k = (s / 2) / CFG.radarRange, hdg = cam ? cam.hdg : 0;
   rctx.save(); rctx.beginPath(); rctx.arc(s / 2, s / 2, s / 2, 0, 7); rctx.clip();
   rctx.translate(s / 2, s / 2); rctx.rotate(-hdg);
-  rctx.beginPath();
-  for (const f of S.feats) for (const r of f.rings) r.forEach((v, i) => {
-    const x = (v[0] - pe) * k, y = -(v[1] - pn) * k; i ? rctx.lineTo(x, y) : rctx.moveTo(x, y);
-  });
-  rctx.strokeStyle = 'rgba(255,230,0,.6)'; rctx.lineWidth = 1; rctx.stroke();
+  const all = new Path2D();
+  rctx.globalAlpha = 0.55;
+  for (const f of S.feats) {   // üksuse täide omandivormi värviga, nagu teemakaardil
+    if (f.bb[0] - pe > CFG.radarRange || pe - f.bb[2] > CFG.radarRange || f.bb[1] - pn > CFG.radarRange || pn - f.bb[3] > CFG.radarRange) continue;
+    const path = new Path2D();
+    for (const r of f.rings) r.forEach((v, i) => { const x = (v[0] - pe) * k, y = -(v[1] - pn) * k; i ? path.lineTo(x, y) : path.moveTo(x, y); });
+    rctx.fillStyle = ownColor(f.own); rctx.fill(path, 'evenodd'); all.addPath(path);
+  }
+  rctx.globalAlpha = 1;
+  rctx.strokeStyle = 'rgba(0,0,0,.55)'; rctx.lineWidth = 1; rctx.stroke(all);
   if (S.here) {   // minu üksus ja lähim koht selle piiril
     rctx.beginPath();
     for (const r of S.here.rings) r.forEach((v, i) => {
@@ -862,6 +881,7 @@ function drawRadar(cam, W) {   // pealtvaade, vaatesuund üleval
   for (const p of S.pts) {   // piiripunktid: täidetud = tähistatud, tühi = tähistamata
     const x = (p.e - pe) * k, y = -(p.n - pn) * k; if (x * x + y * y > s * s / 4) continue;
     rctx.beginPath(); rctx.arc(x, y, 2.4, 0, 7);
+    rctx.strokeStyle = 'rgba(0,0,0,.85)'; rctx.lineWidth = 2.5; rctx.stroke();   // tume äär, et punkt eristuks värvilisel taustal
     if (p.unmarked) { rctx.strokeStyle = PT_COL[p.cls]; rctx.lineWidth = 1; rctx.stroke(); } else { rctx.fillStyle = PT_COL[p.cls]; rctx.fill(); }
   }
   if (S.tgtP) {   // sihtpunkt: valge joon ja rõngas; kaugemal kui minikaardi ulatus jääb joon serva
@@ -909,7 +929,7 @@ function drawHud(cam) {
     add('  ' + cam.src, cam.abs ? '' : 'w');
     if (!cam.abs) add('  Põhjasuund teadmata: joonte suund on vale', 'e');
   }
-  add('Laaditud: ' + S.pts.length + ' piiripunkti, ' + S.feats.length + ' üksust' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : ''));
+  add('Laaditud: ' + S.pts.length + ' piiripunkti, ' + S.feats.length + ' üksust, ±' + (S.fetchR || CFG.radius) + ' m' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : ''));
   if (S.truncated) add('Vastus kärbiti: kõiki objekte ei laaditud', 'w');
   if (S.ptErr) add(S.ptErr, 'e');
   if (S.fetchErr) add(S.fetchErr, 'e');
@@ -933,13 +953,17 @@ function drawHud(cam) {
       if (S.geoErr) rows.push([S.geoErr, 'w']);
       if (S.here && !S.hereGuess) {
         rows.push([S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), '']);
-        rows.push([S.here.own || 'omandivorm teadmata', '']);
+        rows.push([S.here.own || 'omandivorm teadmata', '', ownColor(S.here.own)]);
       } else if (S.here) rows.push(['Ei asu ühelgi üksusel. Lähim: ' + S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), 'w']);
       else if (S.fetchCenter && !S.loading) rows.push(['Ei asu ühelgi üksusel', 'w']);
     } else rows.push([S.geoErr || 'GPS: ootan asukohta…', 'w']);
     for (const r of L) if (r[1] === 'e') rows.push(r);
   }
-  hud.replaceChildren(...rows.map(([t, c]) => { const d = document.createElement('div'); d.textContent = t; if (c) d.className = c; return d; }));
+  hud.replaceChildren(...rows.map(([t, c, bg]) => {
+    const d = document.createElement('div'); d.textContent = t; if (c) d.className = c;
+    if (bg) d.style.cssText = 'display:inline-block;margin-top:2px;padding:1px 6px;border-radius:4px;font-weight:700;color:#111;background:' + bg;
+    return d;
+  }));
 }
 function frame(t) {
   S.raf = requestAnimationFrame(frame);
