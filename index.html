@@ -95,10 +95,10 @@
     <label>Kaamera kõrgus maapinnast <output id="oH"></output>
       <input id="rH" type="range" min="0.5" max="3" step="0.1"></label>
     <div class="row">
-      <span id="nLbl">Nihuta jooni 1 m:</span>
-      <button data-n="l">←</button><button data-n="r">→</button>
-      <button data-n="f">↑ kaugemale</button><button data-n="b">↓ lähemale</button>
-      <button id="bN0" class="noar">Nulli nihe ja parandus</button>
+      <span id="nLbl" class="aronly">Nihuta jooni 1 m:</span>
+      <button data-n="l" class="aronly">←</button><button data-n="r" class="aronly">→</button>
+      <button data-n="f" class="aronly">↑ kaugemale</button><button data-n="b" class="aronly">↓ lähemale</button>
+      <button id="bN0" class="noar">Eemalda kohapealne parandus</button>
     </div>
     <label class="chk noar"><input id="cAvg" type="checkbox"> Keskmista asukoht paigal seistes</label>
     <label class="noar">Keskmistatavate viimaste näitude arv <output id="oAvgN"></output>
@@ -141,7 +141,7 @@ const CFG = {
   refetchDist: 80,    // m, kui kaugele liikudes andmed uuesti küsitakse
   maxFeatures: 1000,
   maxDraw: 250,       // m, kaugemaid piirilõike ei joonistata
-  postDist: 60,       // m, selle raadiuses joonistatakse piiripunktidele 1 m postid ja kaugused
+  postDist: 60,       // m, selle raadiuses joonistatakse piiripunktid kaamerapildile
   stub: 10,           // m, naaberüksuste piiride jupi pikkus alates minu üksuse piirist
   shareTol: 0.5,      // m, nii lähedal minu piirile loetakse naabri piir ühiseks
   maxVtxLabels: 4,    // mitmele lähimale piiripunktile kirjutatakse kaugus
@@ -755,30 +755,32 @@ function draw(cam, W, H) {
       pc = c; pE = e; pN = n;
     }
   }
-  // piiripunktid: 1 m post, värv koordinaadi päritolu järgi, tähistamata punktil katkendjoon
-  const posts = [0, 1, 2].map(() => [new Path2D(), new Path2D()]), tp = new Path2D(), near = [], tgt = S.tgtP;
+  // piiripunktid: täpp maapinnal, värv koordinaadi päritolu järgi, tähistamata punkt on seest tühi
+  const dots = [], near = [], tgt = S.tgtP;
   let T = null; S.hits = [];
   for (const p of S.pts) {
     const e = p.e - pe, n = p.n - pn, d = Math.hypot(e, n), isT = p === tgt;
     if (d > CFG.postDist && !isT) continue;
-    const base = P.toCam(e, n, ground), top = P.toCam(e, n, ground + 1), v = { p, d, base, top };
-    seg(P, isT ? tp : posts[p.cls][p.unmarked ? 1 : 0], base, top, W, H);
-    if (isT) T = v; else near.push(v);
-    for (const c of [top, base]) if (c[2] > 0.2) { const q = P.toPx(c); if (q[0] >= 0 && q[0] <= W && q[1] >= 0 && q[1] <= H) S.hits.push([q[0], q[1], p.nr]); }
+    const c = P.toCam(e, n, ground); if (c[2] < 0.2) continue;
+    const q = P.toPx(c); if (q[0] < -20 || q[0] > W + 20 || q[1] < -20 || q[1] > H + 20) continue;
+    // täpi suurus kahaneb kaugusega: umbes 12 cm raadiusega ketas, piirides 4–12 px
+    const v = { p, d, q, r: Math.max(4, Math.min(12, S.fpx * 0.12 / c[2])) };
+    dots.push(v); if (isT) T = v; else near.push(v);
+    S.hits.push([q[0], q[1], p.nr]);
   }
   ctx.lineJoin = ctx.lineCap = 'round';
   ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.lineWidth = 5; ctx.stroke(other); ctx.stroke(mine);
-  for (const pp of posts) { ctx.stroke(pp[0]); ctx.stroke(pp[1]); }
   ctx.strokeStyle = '#ffe600'; ctx.lineWidth = 2.5; ctx.stroke(other);
   ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 3; ctx.stroke(mine);
-  posts.forEach((pp, i) => {
-    ctx.strokeStyle = PT_COL[i]; ctx.lineWidth = 3; ctx.stroke(pp[0]);
-    ctx.setLineDash([5, 6]); ctx.lineWidth = 2; ctx.stroke(pp[1]); ctx.setLineDash([]);
-  });
-  if (T) {   // sihtpunkt: jämedam post valge äärega ja rõngas jalamil
-    if (T.base[2] > 0.3) { const q = P.toPx(T.base); tp.moveTo(q[0] + 11, q[1]); tp.arc(q[0], q[1], 11, 0, 2 * Math.PI); }
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 8; ctx.stroke(tp);
-    ctx.strokeStyle = PT_COL[T.p.cls]; ctx.lineWidth = 4; ctx.stroke(tp);
+  dots.sort((a, b) => b.d - a.d);   // kaugemad enne, lähemad peale
+  for (const v of dots) {
+    ctx.beginPath(); ctx.arc(v.q[0], v.q[1], v.r, 0, 2 * Math.PI);
+    if (v.p.unmarked) { ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 5; ctx.stroke(); ctx.strokeStyle = PT_COL[v.p.cls]; ctx.lineWidth = 2.5; ctx.stroke(); }
+    else { ctx.fillStyle = PT_COL[v.p.cls]; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1.5; ctx.stroke(); }
+  }
+  if (T) {   // sihtpunkt: valge rõngas ümber täpi
+    ctx.beginPath(); ctx.arc(T.q[0], T.q[1], T.r + 6, 0, 2 * Math.PI);
+    ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 6; ctx.stroke(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
   }
   if (ar && ar.locks) {   // lukustatud punktid ja nendevaheline sirge
     const lk = new Path2D(), pts = ar.locks === 2 ? [ar.A, ar.B] : [ar.A];
@@ -802,24 +804,13 @@ function draw(cam, W, H) {
     lines.forEach((l, i) => { ctx.fillStyle = l[1]; ctx.fillText(l[0], cx, y + 11 + 18 * i); });
     return true;
   };
-  const anchor = v => {   // sildi koht: posti ots; kui see jääb kaadrist välja (punkt on väga lähedal), siis posti jalam
-    for (const c of [v.top, v.base]) {
-      if (c[2] < 0.2) continue;
-      const q = P.toPx(c); if (q[0] >= 0 && q[0] <= W && q[1] >= 24 && q[1] <= H) return q;
-    }
-    return null;
-  };
-  // sildid: sihtpunkt kahe reaga, lähimad punktid ühe reaga
-  if (T) {
-    const q = anchor(T);
-    if (q) box(q[0], q[1] - 24, [[fmtM(T.d) + ' · ' + nice(MARK, T.p.mark), '#fff'], [nice(METHOD, T.p.method) + (T.p.year ? ' ' + T.p.year : ''), '#ffe9a8']], PT_BG[T.p.cls]);
-  }
+  // sildid täpi kohal: sihtpunkt kahe reaga, lähimad punktid ühe reaga
+  if (T) box(T.q[0], Math.max(24, T.q[1] - T.r - 30), [[fmtM(T.d) + ' · ' + nice(MARK, T.p.mark), '#fff'], [nice(METHOD, T.p.method) + (T.p.year ? ' ' + T.p.year : ''), '#ffe9a8']], PT_BG[T.p.cls]);
   near.sort((a, b) => a.d - b.d);
   let count = 0;
   for (const v of near) {
     if (count >= CFG.maxPtLabels) break;
-    const q = anchor(v);
-    if (q && box(q[0], q[1] - 14, [[fmtM(v.d) + ' · ' + nice(MARK, v.p.mark), '#fff']], PT_BG[v.p.cls])) count++;
+    if (box(v.q[0], Math.max(14, v.q[1] - v.r - 15), [[fmtM(v.d) + ' · ' + nice(MARK, v.p.mark), '#fff']], PT_BG[v.p.cls])) count++;
   }
   // joonte vaates "kõik": katastritunnused tsentroidides
   cen.sort((a, b) => a.d - b.d); count = 0;
