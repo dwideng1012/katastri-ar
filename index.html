@@ -3,9 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>Piirimärgi otsija</title>
+<title>Piirimärgid ja huvipunktid</title>
 <!--
-  Katastri piiripunktid telefoni kaamerapildil ja minikaardil. Üks fail, build-sammu ega väliseid teeke pole.
+  Kaks režiimi, valik avalehel. Üks fail, build-sammu ega väliseid teeke pole.
+  1) Piirimärgid: katastri piiripunktid telefoni kaamerapildil ja minikaardil.
+  2) Huvipunktid: Maa- ja Ruumiameti huvipunktid (WFS huvipunkt:huvipunkt) sildina horisondil ja minikaardil; kihivalik salvestub (localStorage katasterAR.poi).
   Andmed: Maa- ja Ruumiameti WFS, kihid kataster:ky_punktid_kehtiv (piiripunktid) ja kataster:ky_kehtiv (piirid), GeoJSON, L-EST97 (EPSG:3301).
   Sihtseade: Android + Chrome, HTTPS (nt GitHub Pages).
   AR-lukk (WebXR) on välja lülitatud: CFG.arLock = false. Kood on alles, aga nuppu ei näidata.
@@ -56,7 +58,21 @@
     padding:24px;background:#101216;font-size:15px;line-height:1.45}
   #start h1{font-size:20px;margin:0}
   #start p{margin:0;color:#cfd3d8}
-  #bStart{min-height:52px;font-size:17px;background:#0b6bcb;border-color:#0b6bcb}
+  #bStart,#bStartPoi{min-height:52px;font-size:17px;background:#0b6bcb;border-color:#0b6bcb}
+  .poi .piir{display:none!important}
+  .poionly{display:none!important}
+  .poi .poionly{display:revert!important}
+  .poi .poionly[hidden]{display:none!important}
+  .poi #tLink{display:inline-block!important}
+  .poi #tLink[hidden]{display:none!important}
+  .layopen #tgt{display:none!important}
+  .layopen #panel{background:rgba(8,9,11,.97)}
+  .poi #radar{pointer-events:auto}
+  #tLink{display:inline-block;margin:4px 0 2px;padding:6px 12px;border:1px solid #777;border-radius:8px;background:#22262c;color:#fff;font-size:14px;text-decoration:none}
+  #lay{max-height:62vh;overflow-y:auto;margin-top:4px}
+  #lay h3{margin:10px 0 2px;font-size:14px;color:#ffd24a}
+  #lay label.chk{margin:5px 0}
+  #lay img{width:18px;height:18px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -74,19 +90,22 @@
     <div id="tUnits"></div>
     <div id="tXY"></div>
     <div id="tHint"></div>
+    <a id="tLink" class="poionly" target="_blank" rel="noopener" hidden>Ava veebis</a>
   </div>
   <div class="row">
     <button id="bCal">Seaded</button>
     <button id="bReload" class="noar">Lae uuesti</button>
-    <button id="bLines" class="noar"></button>
+    <button id="bLay" class="noar poionly">Kihid</button>
+    <button id="bLines" class="noar piir"></button>
     <button id="bNear" class="noar">Lähim</button>
-    <button id="bHere" class="noar">Seisan sellel punktil</button>
+    <button id="bHere" class="noar piir">Seisan sellel punktil</button>
     <button id="bAR" class="noar" hidden>Lukusta (AR)</button>
     <button id="bLock" class="aronly">Lukusta 1. punkt</button>
     <button id="bUndo" class="aronly">Tagasi</button>
     <button id="bExit" class="aronly">Välju</button>
   </div>
   <div class="aronly"><small>Sihi rist päris piirimärgile maas ja vajuta lukustusnuppu. Jooni saab ka sõrmega lohistada.</small></div>
+  <div id="lay" hidden></div>
   <div id="cal" hidden>
     <label class="noar">Suuna parandus <small>(+ nihutab jooni vasakule)</small> <output id="oHdg"></output>
       <input id="rHdg" type="range" min="-20" max="20" step="0.5"></label>
@@ -115,11 +134,13 @@
 </div>
 
 <div id="start">
-  <h1>Piirimärgi otsija</h1>
-  <p>Prototüüp. Vajab kaamera, asukoha ja liikumisandurite luba. Sinu asukoha ümbrus (~200 m kast)
-     saadetakse päringuna Maa- ja Ruumiameti WFS- ja WMS-teenusele (katastriandmed ja ortofoto).</p>
-  <p>Rakendus juhatab piirimärgi lähedale: GPS-i ja kompassi viga on tavaliselt mitu meetrit, viimased meetrid tuleb märki otsida silmaga. See ei asenda piiri mõõdistamist.</p>
-  <button id="bStart">Käivita</button>
+  <h1>Piirimärgid ja huvipunktid</h1>
+  <p>Prototüüp. Vajab kaamera, asukoha ja liikumisandurite luba. Sinu asukoha ümbrus saadetakse päringuna
+     Maa- ja Ruumiameti WFS- ja WMS-teenustele (katastriandmed, huvipunktid ja ortofoto).</p>
+  <button id="bStart">Piirimärgid</button>
+  <p><small>Juhatab katastri piirimärgi lähedale. GPS-i ja kompassi viga on tavaliselt mitu meetrit, viimased meetrid tuleb märki otsida silmaga. See ei asenda piiri mõõdistamist.</small></p>
+  <button id="bStartPoi">Huvipunktid</button>
+  <p><small>Näitab ümbruse mõisaid, mälestisi, loodusobjekte, matkaradu ja muud kuni 10 km kauguselt. Kihte saab ise valida.</small></p>
 </div>
 
 <script>
@@ -195,6 +216,7 @@ const S = {
   hdg: 0, here: null, hereGuess: false, near: null, nearV: null, xr: 'kontrollin…',
   avg: { buf: [], resetT: -1e9, why: '', resets: 0 },
   calib: null, calRun: null, msg: '', msgT: -1e9,
+  mode: 'piir', pois: [], poiN: {}, poiErr: '', boxes: [],
   courseOn: false, courseOff: 0, hdgRaw: 0, hdgRawT: -1e9, orto: null, started: false,
   ar: null, arErr: '', camErr: '', P: null, raf: 0, oriT: -1e9, errs: [], geoErr: '', lastT: 0, hudT: 0, fpx: 600
 };
@@ -400,12 +422,18 @@ async function loadParcels() {
 }
 
 // Ortofoto minikaardi alla: üks WMS-pilt laadimiskoha ümber, L-EST97-s, seega kattub katastriga ilma teisendamata.
-function loadOrto(o) {
+function loadOrto(o, h, trails) {   // o = keskpunkt {E, N}, h = poolkülg meetrites; trails = kas laadida ka matkaradade joonte pilt
   if (!S.cal.orto) { S.orto = null; return; }
-  const h = CFG.ortoHalf, im = new Image();
-  im.onload = () => { if (S.origin === o) S.orto = { im, E: o.E, N: o.N, h }; };
-  im.src = CFG.orto + '?service=WMS&version=1.1.1&request=GetMap&layers=EESTIFOTO&styles=&srs=EPSG:3301&format=image/jpeg&width=' + CFG.ortoPx +
-    '&height=' + CFG.ortoPx + '&bbox=' + [o.E - h, o.N - h, o.E + h, o.N + h].map(v => v.toFixed(1)).join(',');
+  h = h || CFG.ortoHalf;
+  const bbox = '&width=' + CFG.ortoPx + '&height=' + CFG.ortoPx + '&bbox=' + [o.E - h, o.N - h, o.E + h, o.N + h].map(v => v.toFixed(1)).join(',');
+  const rec = { im: new Image(), tr: null, E: o.E, N: o.N, h, ok: false };
+  S.ortoReq = rec;
+  rec.im.onload = () => { if (S.ortoReq === rec) { rec.ok = true; S.orto = rec; } };
+  rec.im.src = CFG.orto + '?service=WMS&version=1.1.1&request=GetMap&layers=EESTIFOTO&styles=&srs=EPSG:3301&format=image/jpeg' + bbox;
+  if (trails) {   // joonobjektide geomeetria on WFS-is raske, seepärast tulevad rajad minikaardile pildina
+    const tr = new Image(); tr.onload = () => { rec.tr = tr; };
+    tr.src = POI.wms + '?service=WMS&version=1.1.1&request=GetMap&layers=' + POI.trailLayers + '&styles=&srs=EPSG:3301&format=image/png&transparent=true' + bbox;
+  }
 }
 
 /* ---------- paigalseis, libisev keskmine ja kohapealne kalibreerimine ----------
@@ -516,8 +544,8 @@ function onFix(lat, lon, acc, alt, altAcc, speed, course) {
   S.fix = { lat, lon, E, N, uE, uN, acc, alt, altAcc, speed, fast, t: Date.now() }; S.geoErr = '';
   if (!S.pos) S.pos = { E: uE, N: uN };
   if (performance.now() - S.lastTry < 5000) return;
-  if (!S.fetchCenter) return void loadParcels();
-  if (Math.hypot(E - S.fetchCenter.E, N - S.fetchCenter.N) > (fast ? 150 : CFG.refetchDist)) loadParcels();   // sõites harvem
+  if (!S.fetchCenter) return void loadData();
+  if (Math.hypot(E - S.fetchCenter.E, N - S.fetchCenter.N) > (S.mode === 'poi' ? POI.refetch : fast ? 150 : CFG.refetchDist)) loadData();   // sõites harvem
 }
 
 /* ---------- orientatsioon ---------- */
@@ -989,7 +1017,8 @@ function drawHud(cam) {
     if (cam.byCourse) add('  Suund GPS-i liikumissuunast, kompassi nihe ' + sg(S.courseOff * R2D) + '°', 'w');
     if (!cam.abs) add('  Põhjasuund teadmata: joonte suund on vale', 'e');
   }
-  add('Laaditud: ' + S.pts.length + ' piiripunkti, ' + S.feats.length + ' üksust, ±' + (S.fetchR || CFG.radius) + ' m' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : ''));
+  if (S.mode === 'poi') { add('Laaditud: ' + S.pois.length + ' huvipunkti, raadius ' + POI.radius / 1000 + ' km' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : '')); if (S.poiErr) add(S.poiErr, 'e'); }
+  else add('Laaditud: ' + S.pts.length + ' piiripunkti, ' + S.feats.length + ' üksust, ±' + (S.fetchR || CFG.radius) + ' m' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : ''));
   if (S.truncated) add('Vastus kärbiti: kõiki objekte ei laaditud', 'w');
   if (S.ptErr) add(S.ptErr, 'e');
   if (S.fetchErr) add(S.fetchErr, 'e');
@@ -1011,7 +1040,8 @@ function drawHud(cam) {
       const u = userAbs();
       rows.push(['X ' + u[1].toFixed(1).replace('.', ',') + '  Y ' + u[0].toFixed(1).replace('.', ',') + '  ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m' + (!S.sim && fixAge() > 5000 ? '  näit ' + Math.round(fixAge() / 1000) + ' s vana' : ''), f.acc > 10 || (!S.sim && fixAge() > 5000) ? 'w' : '']);
       if (S.geoErr) rows.push([S.geoErr, 'w']);
-      if (S.here && !S.hereGuess) {
+      if (S.mode === 'poi') { if (S.poiErr) rows.push([S.poiErr, 'e']); }
+      else if (S.here && !S.hereGuess) {
         rows.push([S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), '']);
         rows.push([S.here.own || 'omandivorm teadmata', '', ownColor(S.here.own)]);
       } else if (S.here) rows.push(['Ei asu ühelgi üksusel. Lähim: ' + S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), 'w']);
@@ -1039,10 +1069,259 @@ function frame(t) {
   }
   const cam = camera();
   const tick = t - S.hudT > 250;
+  if (S.mode === 'poi') {
+    if (tick) locatePoi();
+    if (cam && S.pos && S.origin) drawPoi(cam, W, H);
+    if (tick) { S.hudT = t; ensureOrto(); drawHud(cam); drawRadarPoi(cam, W); drawTargetPoi(); drawChips(); }
+    return;
+  }
   if (tick || S.here === null) locate();
   if (cam && S.pos && S.origin) draw(cam, W, H);
   if (tick) { S.hudT = t; drawHud(cam); drawRadar(cam, W); calTick(); drawTarget(); drawChips(); }
 }
+
+/* ---------- huvipunktid ----------
+   Andmed: Maa- ja Ruumiameti GeoServer, koondkiht huvipunkt:huvipunkt (kõik huvipunktid ühel kihil, väli "kiht").
+   Geomeetriat ei laadita: asukoht tuleb väljadest x ja y (joonobjektil on see raja tähispunkt), nii jääb vastus väikeseks.
+   Serverile saadetakse ainult sisse lülitatud kihid; peenem jaotus tüübi järgi tehakse siin. */
+const POI = {
+  wfs: 'https://gsavalik.envir.ee/geoserver/huvipunkt/wfs', wms: 'https://gsavalik.envir.ee/geoserver/huvipunkt/wms',
+  trailLayers: 'huvipunkt:rmk_matkarada_j,huvipunkt:rmk_matkatee_j,huvipunkt:kea_matkarada_j',
+  radius: 10000,      // m, laadimise raadius
+  refetch: 3000,      // m, kui kaugele liikudes laaditakse uuesti
+  max: 4000,          // suurim objektide arv ühes vastuses
+  ranges: [500, 2000, 10000],   // m, kuvamise ulatus; vahetub minikaardile vajutades
+  maxLabels: 8,
+  groups: ['Kultuur', 'Loodus', 'Matkamine', 'Veel kihte'],
+  colors: ['#c58af9', '#5bd67a', '#ffb000', '#9aa0a6'],
+  // Kategooria: id, nimi, rühm, vaikimisi sees, serveri kihid, tingimus (puudub = kogu kiht), ikooni WMS-kiht.
+  // Järjekord loeb: objekt läheb esimesse sobivasse kategooriasse.
+  cats: [
+    { id: 'mois', name: 'Mõisad', g: 0, on: 1, k: ['hp_kultuurilugu'], m: p => p.tyypnimi === 'mõisa asukoht' || p.tyypnimi === 'mõisa peahoone', ic: 'kultuurilugu' },
+    { id: 'moisase', name: 'Mõisa peahoone asemed', g: 0, on: 0, k: ['hp_kultuurilugu'], m: p => p.tyypnimi === 'mõisa peahoone ase', ic: 'kultuurilugu' },
+    { id: 'malestis', name: 'Mälestised', g: 0, on: 1, k: ['hp_kultuurilugu'], m: p => p.alamgrupp === 'mälestis', ic: 'kultuurilugu' },
+    { id: 'linnus', name: 'Linnused ja linnamäed', g: 0, on: 1, k: ['hp_kultuurilugu'], ic: 'kultuurilugu' },
+    { id: 'kirik', name: 'Kirikud', g: 0, on: 1, k: ['hp_kirik'], ic: 'kirik' },
+    { id: 'muuseum', name: 'Muuseumid', g: 0, on: 1, k: ['hp_muuseum'], ic: 'muuseum' },
+    { id: 'kalmistu', name: 'Kalmistud', g: 0, on: 0, k: ['hp_kalmistu'], ic: 'kalmistu' },
+    { id: 'teater', name: 'Teatrid, kontserdimajad, kinod', g: 0, on: 0, k: ['hp_teater', 'hp_kontserdimaja', 'hp_kino'], ic: 'teater' },
+    { id: 'kultuurikeskus', name: 'Kultuuri- ja noortekeskused', g: 0, on: 0, k: ['hp_kultuuriasutus'], ic: 'kultuurikeskus' },
+    { id: 'raamatukogu', name: 'Raamatukogud', g: 0, on: 0, k: ['hp_raamatukogu'], ic: 'raamatukogu' },
+    { id: 'kivi', name: 'Kivid ja rändrahnud', g: 1, on: 1, k: ['hp_loodusobjekt'], m: p => p.alamgrupp === 'kivi', ic: 'loodusobjekt' },
+    { id: 'juga', name: 'Joad ja koopad', g: 1, on: 1, k: ['hp_loodusobjekt'], m: p => p.alamgrupp === 'juga' || p.alamgrupp === 'koobas', ic: 'loodusobjekt' },
+    { id: 'pais', name: 'Paisud', g: 1, on: 0, k: ['hp_loodusobjekt'], ic: 'loodusobjekt' },
+    { id: 'suplus', name: 'Supluskohad', g: 1, on: 1, k: ['hp_supluskoht'], ic: 'supluskoht' },
+    { id: 'allikas', name: 'Allikad', g: 1, on: 0, k: ['hp_veekogu'], m: p => p.tyypnimi === 'allikas', ic: 'veekogu' },
+    { id: 'veekogu', name: 'Järved, jõed ja ojad', g: 1, on: 0, k: ['hp_veekogu'], ic: 'veekogu' },
+    { id: 'vaatetorn', name: 'Vaatetornid ja -platvormid', g: 2, on: 1, k: ['hp_terviserada', 'hp_rajatis'], m: p => /vaatetorn|vaateplatvorm/.test(p.tyypnimi), ic: 'kylastus_vaatetorn' },
+    { id: 'tuletorn', name: 'Tuletornid', g: 2, on: 1, k: ['hp_rajatis'], m: p => p.tyypnimi === 'tuletorn', ic: 'rajatis' },
+    { id: 'matkarada', name: 'Matkarajad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /matkarada|matkatee|loodusõpperada/.test(p.tyypnimi), ic: 'rmk_matkarada_j', line: p => /^(RMK matkarada|RMK matkatee|KeA KOV külastustaristu matkarada)$/.test(p.tyypnimi) },
+    { id: 'lokke', name: 'Lõkke- ja puhkekohad, telkimisalad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /lõkkekoht|telkimisala|puhkekoht|metsaonn|metsamaja/.test(p.tyypnimi), ic: 'rmk_kylastustaristu' },
+    { id: 'ratas', name: 'Jalgrattarajad', g: 2, on: 0, k: ['hp_terviserada'], m: p => /jalgrattarada/.test(p.tyypnimi), ic: 'rmk_rattarada_j' },
+    { id: 'terviserada', name: 'Terviserajad', g: 2, on: 0, k: ['hp_terviserada', 'hp_spordiobjekt'], m: p => p.tyypnimi === 'eesti terviserada', ic: 'eestiterviserada_j' },
+    { id: 'rmkmuu', name: 'Muu külastustaristu (RMK, Keskkonnaamet)', g: 2, on: 1, k: ['hp_terviserada'], ic: 'rmk_kylastustaristu' },
+    { id: 'parkla', name: 'Parklad', g: 3, on: 0, k: ['hp_parkla'], ic: 'parkla' },
+    { id: 'majutus', name: 'Majutus', g: 3, on: 0, k: ['hp_majutus'], ic: 'majutus' },
+    { id: 'toitlustus', name: 'Toitlustus', g: 3, on: 0, k: ['hp_toitlustus'], ic: 'toitlustus' },
+    { id: 'sadam', name: 'Sadamad', g: 3, on: 0, k: ['hp_sadam', 'hp_sadamaterminal'], ic: 'sadam' },
+    { id: 'sild', name: 'Sillad ja tunnelid', g: 3, on: 0, k: ['hp_sild', 'hp_tunnel'], ic: 'sild' },
+    { id: 'rajatis', name: 'Mastid, korstnad, tornid, tuulikud, meremärgid', g: 3, on: 0, k: ['hp_rajatis'], ic: 'rajatis' },
+    { id: 'transport', name: 'Peatused, jaamad, tanklad', g: 3, on: 0, k: ['hp_bussipeatus', 'hp_maaratlemata_peatus', 'hp_rongipeatus', 'hp_trammipeatus', 'hp_bussiterminal', 'hp_rongiterminal', 'hp_lennuterminal', 'hp_lennuvali', 'hp_tankla'], ic: 'bussipeatus' },
+    { id: 'sport', name: 'Spordirajatised', g: 3, on: 0, k: ['hp_spordiobjekt'], ic: 'spordihoone' },
+    { id: 'tervis', name: 'Tervishoid ja hoolekanne', g: 3, on: 0, k: ['hp_haigla', 'hp_perearst', 'hp_kiirabi', 'hp_tervisekaubad', 'hp_hoolekanne'], ic: 'haigla' },
+    { id: 'haridus', name: 'Haridusasutused', g: 3, on: 0, k: ['hp_haridus'], ic: 'haridusasutus' },
+    { id: 'teenused', name: 'Post, pangad, kaubandus', g: 3, on: 0, k: ['hp_post', 'hp_atm', 'hp_pank', 'hp_arihoone', 'hp_ooklubi'], ic: 'post' },
+    { id: 'haldus', name: 'Haldus, pääste ja ohutus', g: 3, on: 0, k: ['hp_administratiivkeskus', 'hp_riigiasutus', 'hp_valisesindus', 'hp_politsei', 'hp_piirivalve', 'hp_paaste', 'hp_veeohutus', 'hp_varjumiskoht', 'hp_ohtlik_ettevote', 'hp_jaatmejaam'], ic: 'paastekomando' }
+  ],
+  icons: {},
+  icon(name) {   // kihi ikoon GeoServeri legendist, ilma tekstita
+    let im = this.icons[name];
+    if (!im) { im = this.icons[name] = new Image(); im.src = this.wms + '?service=WMS&version=1.1.1&request=GetLegendGraphic&layer=huvipunkt:' + name + '&format=image/png&width=24&height=24&transparent=true&LEGEND_OPTIONS=forceLabels:off'; }
+    return im.complete && im.naturalWidth > 0 ? im : null;
+  }
+};
+// Kasutaja valikud jäävad telefoni meelde (localStorage): millised kategooriad on sees, kas näidata nimeta objekte, ulatus.
+const PS = { on: {}, unnamed: false, range: 2000 };
+for (const c of POI.cats) PS.on[c.id] = !!c.on;
+try { const v = JSON.parse(localStorage.getItem('katasterAR.poi') || '{}'); if (v.on) for (const c of POI.cats) if (typeof v.on[c.id] === 'boolean') PS.on[c.id] = v.on[c.id]; if (typeof v.unnamed === 'boolean') PS.unnamed = v.unnamed; if (POI.ranges.includes(v.range)) PS.range = v.range; } catch (e) {}
+function savePoi() { try { localStorage.setItem('katasterAR.poi', JSON.stringify(PS)); } catch (e) {} }
+const fmtD = d => d < 1000 ? Math.round(d / (d < 100 ? 1 : 10)) * (d < 100 ? 1 : 10) + ' m' : (d / 1000).toFixed(d < 10000 ? 1 : 0).replace('.', ',') + ' km';
+const catOf = p => POI.cats.find(c => c.k.includes(p.kiht) && (!c.m || c.m(p)));
+
+function loadData() { return S.mode === 'poi' ? loadPoi() : loadParcels(); }
+async function loadPoi() {
+  const p = S.fix; if (!p || S.loading) return;
+  S.loading = true; S.lastTry = performance.now();
+  const o = { E: p.E, N: p.N }, r = POI.radius, t0 = performance.now();
+  const kihid = [...new Set(POI.cats.filter(c => PS.on[c.id]).flatMap(c => c.k))];
+  let list = [], err = '', truncated = false;
+  if (kihid.length) {
+    // CQL-is peab BBOX-il olema koordinaatsüsteem kaasas, muidu loeb GeoServer teljed vastupidi.
+    const cql = 'BBOX(shape,' + [o.E - r, o.N - r, o.E + r, o.N + r].map(v => v.toFixed(0)).join(',') + ",'EPSG:3301') AND kiht IN (" + kihid.map(k => "'" + k + "'").join(',') + ')';
+    const url = POI.wfs + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=huvipunkt:huvipunkt&outputFormat=application/json&count=' + POI.max +
+      '&propertyName=nimi,alias,alamgrupp,tyypnimi,kiht,markus,aadress,url,www,x,y,poi_id&cql_filter=' + encodeURIComponent(cql);
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 15000);
+    try {
+      const g = await fetch(url, { signal: ac.signal }).then(x => { if (!x.ok) throw new Error('HTTP ' + x.status); return x.json(); });
+      if (!g || !Array.isArray(g.features)) throw new Error('vastus ei ole GeoJSON');
+      truncated = g.numberMatched > g.features.length;
+      for (const f of g.features) {
+        const q = f.properties || {}, c = catOf(q), E = Number(q.x), N = Number(q.y);
+        if (!c || !PS.on[c.id] || !isFinite(E) || !isFinite(N)) continue;
+        if (!q.nimi && !PS.unnamed) continue;
+        if (Math.hypot(E - o.E, N - o.N) > r * 1.5) continue;   // rada, mis ainult läbib ala, aga mille tähispunkt on kaugel
+        list.push({ id: String(q.poi_id != null ? q.poi_id : f.id), name: q.nimi || c.name, alias: q.alias || '', type: q.tyypnimi || '', cat: c, line: !!(c.line && c.line(q)),
+                    addr: q.aadress || '', note: q.markus || '', url: q.url || q.www || '', E, N, e: E - o.E, n: N - o.N, d: null });
+      }
+    } catch (e) {
+      err = 'Huvipunktid: ' + (e.name === 'AbortError' ? 'WFS ei vastanud 15 sekundiga' : e.name === 'TypeError' ? 'päring ei läinud läbi: võrk puudub või CORS blokeerib (' + e.message + ')' : (e.message || String(e)));
+    } finally { clearTimeout(timer); }
+  }
+  if (!err) {
+    S.origin = o; S.fetchCenter = o; S.fetchMs = Math.round(performance.now() - t0); S.pois = list; S.truncated = truncated; S.tgtP = null;
+    S.poiN = {}; for (const q of list) S.poiN[q.cat.id] = (S.poiN[q.cat.id] || 0) + 1;
+    if (!$('lay').hidden) buildLayers();
+  }
+  S.poiErr = err; S.loading = false;
+}
+function locatePoi() {
+  if (!S.pos || !S.origin) return;
+  const [pe, pn] = userENU(); let near = null, nd = Infinity, tgt = null;
+  for (const p of S.pois) {
+    p.d = Math.hypot(p.e - pe, p.n - pn);
+    if (p.d < nd) { nd = p.d; near = p; }
+    if (p.id === S.tgt) tgt = p;
+  }
+  if (S.tgt && !tgt) S.tgt = null;
+  S.tgtP = tgt || near;
+}
+// Kaamerapilt: silt on horisondil õiges suunas (kõrgust ei ole vaja), lähemad allpool, kaugemad kuhjuvad ülespoole.
+function drawPoi(cam, W, H) {
+  const [pe, pn] = userENU(); S.fpx = focalPx(W, H);
+  const P = S.P = mkProj(cam.R, W, H, S.fpx, screenAngle()), T = S.tgtP, vis = [];
+  S.boxes = [];
+  for (const p of S.pois) {
+    if (p.d == null || (p.d > PS.range && p !== T)) continue;
+    const c = P.toCam(p.e - pe, p.n - pn, 0); if (c[2] < 0.5) continue;
+    const q = P.toPx(c); if (q[0] < -30 || q[0] > W + 30) continue;
+    vis.push({ p, q });
+  }
+  vis.sort((a, b) => (b.p === T) - (a.p === T) || a.p.d - b.p.d);
+  ctx.font = '600 13px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineCap = 'round';
+  const placed = [], items = [], top = 64, base = H * 0.62;
+  for (const v of vis.slice(0, POI.maxLabels + 1)) {   // 1. samm: siltide kohad
+    const p = v.p, name = p.name.length > 28 ? p.name.slice(0, 27) + '…' : p.name, txt = name + ' · ' + fmtD(p.d);
+    const w = ctx.measureText(txt).width + 36, h = 26, hy = Math.max(top + 40, Math.min(base, v.q[1]));   // horisont võib olla kaadrist väljas: silt jääb ikka nähtavale
+    const x = Math.max(4, Math.min(W - w - 4, v.q[0] - w / 2)); let y = hy - 34, tries = 0;
+    while (tries < 12 && placed.some(r => x < r[0] + r[2] && x + w > r[0] && y < r[1] + r[3] + 3 && y + h + 3 > r[1])) { y -= h + 4; tries++; }
+    if (y < top) continue;
+    placed.push([x, y, w, h]); S.boxes.push([x, y, w, h, p.id]);
+    items.push({ p, txt, x, y, w, h, hy, qx: v.q[0], isT: p === T });
+  }
+  for (const it of items) {   // 2. samm: juhtjooned ja suunatäpid, et need jääksid siltide alla
+    const ax = Math.max(it.x + 8, Math.min(it.x + it.w - 8, it.qx)), col = POI.colors[it.p.cat.g];
+    ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(ax, it.y + it.h); ctx.lineTo(it.qx, it.hy); ctx.stroke();
+    ctx.strokeStyle = it.isT ? '#fff' : col; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(it.qx, it.hy, 4, 0, 7); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  for (const it of items) {   // 3. samm: sildid
+    ctx.fillStyle = it.isT ? 'rgba(11,75,140,.94)' : 'rgba(0,0,0,.8)'; ctx.fillRect(it.x, it.y, it.w, it.h);
+    if (it.isT) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.strokeRect(it.x, it.y, it.w, it.h); }
+    const ic = POI.icon(it.p.cat.ic);
+    if (ic) ctx.drawImage(ic, it.x + 4, it.y + 3, 20, 20); else { ctx.beginPath(); ctx.arc(it.x + 14, it.y + it.h / 2, 6, 0, 7); ctx.fillStyle = POI.colors[it.p.cat.g]; ctx.fill(); }
+    ctx.fillStyle = '#fff'; ctx.fillText(it.txt, it.x + 30, it.y + it.h / 2 + 1);
+  }
+}
+function ensureOrto() {   // ortofoto järgib kasutajat ja valitud ulatust
+  if (!S.cal.orto) { S.orto = null; return; }
+  if (!S.pos || !S.origin) return;
+  const u = userAbs(), h = PS.range * 1.4, cur = S.ortoReq;
+  if (cur && cur.h === h && Math.hypot(u[0] - cur.E, u[1] - cur.N) < PS.range * 0.3) return;
+  loadOrto({ E: u[0], N: u[1] }, h, PS.on.matkarada || PS.on.ratas);
+}
+function drawRadarPoi(cam, W) {
+  const s = 130, dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (radar.width !== s * dpr) { radar.width = radar.height = s * dpr; }
+  rctx.setTransform(dpr, 0, 0, dpr, 0, 0); rctx.clearRect(0, 0, s, s);
+  rctx.fillStyle = 'rgba(0,0,0,.6)'; rctx.beginPath(); rctx.arc(s / 2, s / 2, s / 2, 0, 7); rctx.fill();
+  if (!S.pos || !S.origin) return;
+  const [pe, pn] = userENU(), k = (s / 2) / PS.range, hdg = cam ? cam.hdg : 0, ph = S.cal.orto && S.orto && S.orto.ok ? S.orto : null;
+  rctx.save(); rctx.beginPath(); rctx.arc(s / 2, s / 2, s / 2, 0, 7); rctx.clip();
+  rctx.translate(s / 2, s / 2); rctx.rotate(-hdg);
+  if (ph) {
+    const cx = ph.E - S.origin.E, cy = ph.N - S.origin.N, x = (cx - ph.h - pe) * k, y = -(cy + ph.h - pn) * k, d = 2 * ph.h * k;
+    rctx.drawImage(ph.im, x, y, d, d); if (ph.tr) rctx.drawImage(ph.tr, x, y, d, d);
+  }
+  for (const p of S.pois) {
+    if (p.d == null || p.d > PS.range) continue;
+    const x = (p.e - pe) * k, y = -(p.n - pn) * k;
+    rctx.beginPath(); rctx.arc(x, y, 3.2, 0, 7); rctx.fillStyle = POI.colors[p.cat.g]; rctx.fill(); rctx.strokeStyle = 'rgba(0,0,0,.85)'; rctx.lineWidth = 1; rctx.stroke();
+  }
+  if (S.tgtP) {
+    let x = (S.tgtP.e - pe) * k, y = -(S.tgtP.n - pn) * k; const r = Math.hypot(x, y), m = s / 2 - 3;
+    if (r > m) { x *= m / r; y *= m / r; }
+    rctx.strokeStyle = '#fff'; rctx.lineWidth = 1.5; rctx.beginPath(); rctx.moveTo(0, 0); rctx.lineTo(x, y); rctx.stroke();
+    rctx.beginPath(); rctx.arc(x, y, 5.5, 0, 7); rctx.stroke();
+  }
+  rctx.fillStyle = '#ff7b7b'; rctx.font = 'bold 11px sans-serif'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle';
+  rctx.fillText('P', 0, -s / 2 + 9);
+  rctx.restore();
+  const half = Math.atan((W / 2) / S.fpx);
+  rctx.strokeStyle = 'rgba(255,255,255,.8)'; rctx.lineWidth = 1; rctx.beginPath();
+  rctx.moveTo(s / 2 - Math.sin(half) * s / 2, s / 2 - Math.cos(half) * s / 2); rctx.lineTo(s / 2, s / 2);
+  rctx.lineTo(s / 2 + Math.sin(half) * s / 2, s / 2 - Math.cos(half) * s / 2); rctx.stroke();
+  rctx.fillStyle = '#00e5ff'; rctx.beginPath(); rctx.arc(s / 2, s / 2, 3, 0, 7); rctx.fill();
+  // ulatus ringi all servas; minikaardile vajutus vahetab seda
+  const lbl = fmtD(PS.range); rctx.font = '600 11px sans-serif'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle';
+  const lw = rctx.measureText(lbl).width + 10; rctx.fillStyle = 'rgba(0,0,0,.75)'; rctx.fillRect(s / 2 - lw / 2, s - 19, lw, 15); rctx.fillStyle = '#fff'; rctx.fillText(lbl, s / 2, s - 11);
+}
+function drawTargetPoi() {
+  const el = $('tgt'), p = S.tgtP;
+  if (!p || !S.pos || !S.origin) {
+    if (S.fetchCenter && !S.loading && !S.pois.length) { el.hidden = false; $('tArrow').textContent = ''; $('tDist').textContent = 'Lähedal huvipunkte ei ole'; $('tInfo').textContent = 'Lülita nupust "Kihid" sisse rohkem kihte.'; $('tUnits').textContent = $('tXY').textContent = $('tHint').textContent = ''; $('tLink').hidden = true; }
+    else el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  const [pe, pn] = userENU(), de = p.e - pe, dn = p.n - pn, d = Math.hypot(de, dn);
+  $('tArrow').textContent = '↑'; $('tArrow').style.transform = 'rotate(' + (Math.atan2(de, dn) - S.hdg) + 'rad)';
+  $('tDist').textContent = fmtD(d) + ' · ' + p.name + (S.tgt ? '' : ' (lähim)');
+  $('tInfo').textContent = p.type + (p.alias ? ' · ' + p.alias : '') + (p.line ? ' · kaugus raja tähispunktini' : '');
+  $('tUnits').textContent = p.addr;
+  $('tXY').textContent = p.note.length > 160 ? p.note.slice(0, 159) + '…' : p.note;
+  $('tHint').textContent = performance.now() - S.msgT < 5000 ? S.msg : '';
+  const a = $('tLink'), ok = /^https?:\/\//i.test(p.url);
+  a.hidden = !ok; if (ok) a.href = p.url;
+}
+// Kihtide paneel: rühmad linnukestega, iga kategooria järel laaditud objektide arv. Muudatus salvestub kohe.
+function buildLayers() {
+  const el = $('lay'), keep = el.scrollTop; el.textContent = '';
+  let dirty = false;
+  const chk = (label, val, set, icon) => {
+    const l = document.createElement('label'), i = document.createElement('input'); l.className = 'chk'; i.type = 'checkbox'; i.checked = val;
+    i.addEventListener('change', () => { set(i.checked); savePoi(); dirty = true; });
+    l.append(i); if (icon) { const im = document.createElement('img'); im.src = icon; im.alt = ''; l.append(im); }
+    l.append(document.createTextNode(label)); el.append(l);
+  };
+  POI.groups.forEach((g, gi) => {
+    const h = document.createElement('h3'); h.textContent = g; el.append(h);
+    for (const c of POI.cats) if (c.g === gi) {
+      const im = POI.icon(c.ic) || POI.icons[c.ic];
+      chk(c.name + (PS.on[c.id] && S.fetchCenter ? ' (' + (S.poiN[c.id] || 0) + ')' : ''), PS.on[c.id], v => { PS.on[c.id] = v; }, im && im.src);
+    }
+  });
+  const h = document.createElement('h3'); h.textContent = 'Muu'; el.append(h);
+  chk('Näita ka nimeta objekte', PS.unnamed, v => { PS.unnamed = v; });
+  const row = document.createElement('div'), b = document.createElement('button'), b2 = document.createElement('button'); row.className = 'row';
+  b.textContent = 'Sulge ja lae'; b.addEventListener('click', () => { el.hidden = true; document.body.classList.remove('layopen'); if (dirty) { S.tgt = null; loadPoi(); } });
+  b2.textContent = 'Taasta vaikimisi'; b2.addEventListener('click', () => { for (const c of POI.cats) PS.on[c.id] = !!c.on; PS.unnamed = false; savePoi(); buildLayers(); S.tgt = null; loadPoi(); });
+  row.append(b, b2); el.append(row); el.scrollTop = keep;
+}
+$('bLay').addEventListener('click', () => { const el = $('lay'); if (el.hidden) { $('cal').hidden = true; buildLayers(); el.hidden = false; } else el.hidden = true; document.body.classList.toggle('layopen', !el.hidden); });
+radar.addEventListener('click', () => {   // huvipunktide vaates vahetab vajutus minikaardil ulatust
+  if (S.mode !== 'poi') return;
+  PS.range = POI.ranges[(POI.ranges.indexOf(PS.range) + 1) % POI.ranges.length]; savePoi(); say('Ulatus ' + fmtD(PS.range)); S.hudT = -1e9;
+});
 
 /* ---------- käivitamine ja juhtnupud ---------- */
 function startCamera() {
@@ -1055,7 +1334,10 @@ function stopCamera() {
   const st = video.srcObject; if (st) st.getTracks().forEach(t => t.stop());
   video.srcObject = null;
 }
-function start() {
+function start(mode) {
+  S.mode = mode === 'poi' ? 'poi' : 'piir';
+  document.body.classList.toggle('poi', S.mode === 'poi');
+  if (S.mode === 'poi') buildLayers();
   $('start').hidden = true;
   if (!window.isSecureContext) S.errs.push('Leht ei ole HTTPS-il: kaamera, GPS ja andurid ei tööta.');
 
@@ -1100,10 +1382,11 @@ function start() {
   S.started = true;
   S.raf = requestAnimationFrame(frame);
 }
-$('bStart').addEventListener('click', start);
+$('bStart').addEventListener('click', () => start('piir'));
+$('bStartPoi').addEventListener('click', () => start('poi'));
 $('bCal').addEventListener('click', () => { $('cal').hidden = !$('cal').hidden; });
 $('bCalClose').addEventListener('click', () => { $('cal').hidden = true; });
-$('bReload').addEventListener('click', () => { loadParcels(); });
+$('bReload').addEventListener('click', () => { loadData(); });
 $('bN0').addEventListener('click', () => { if (!S.ar) { S.nudge = [0, 0]; S.calib = null; S.calRun = null; } });
 $('bHere').addEventListener('click', () => { calStart(); drawTarget(); });
 // vajutus paranduse märgile eemaldab kohapealse paranduse
@@ -1132,9 +1415,13 @@ function showLinesBtn() { $('bLines').textContent = 'Jooned: ' + ['ei', 'oma ük
 $('bLines').addEventListener('click', () => { S.cal.lines = (S.cal.lines + 1) % 3; saveCal(); showLinesBtn(); });
 showLinesBtn();
 // Sihtpunkti valik: "Lähim" järgib alati lähimat punkti, täpile vajutus valib selle
-$('bNear').addEventListener('click', () => { S.tgt = null; locate(); drawTarget(); });
+$('bNear').addEventListener('click', () => { S.tgt = null; if (S.mode === 'poi') { locatePoi(); drawTargetPoi(); } else { locate(); drawTarget(); } });
 cv.addEventListener('click', e => {
   if (S.ar) return;
+  if (S.mode === 'poi') {   // vajutus sildile valib selle huvipunkti
+    for (const b of S.boxes) if (e.clientX >= b[0] - 6 && e.clientX <= b[0] + b[2] + 6 && e.clientY >= b[1] - 6 && e.clientY <= b[1] + b[3] + 6) { S.tgt = b[4]; locatePoi(); drawTargetPoi(); return; }
+    return;
+  }
   let best = null, bd = 44;
   for (const h of S.hits) { const d = Math.hypot(h[0] - e.clientX, h[1] - e.clientY); if (d < bd) { bd = d; best = h[2]; } }
   if (best) { S.tgt = best; locate(); drawTarget(); }
@@ -1162,7 +1449,7 @@ bindRange('rH', 'oH', 'h', v => v.toFixed(1) + ' m');
 if (!(S.cal.avgN >= 3 && S.cal.avgN <= 30)) S.cal.avgN = 10;
 bindRange('rAvgN', 'oAvgN', 'avgN', v => String(v));
 $('cOrto').checked = !!S.cal.orto;
-$('cOrto').addEventListener('change', () => { S.cal.orto = $('cOrto').checked; saveCal(); if (S.cal.orto && S.origin) loadOrto(S.origin); else S.orto = null; S.hudT = -1e9; });
+$('cOrto').addEventListener('change', () => { S.cal.orto = $('cOrto').checked; saveCal(); if (S.cal.orto && S.origin && S.mode === 'piir') loadOrto(S.origin); else S.orto = null; S.hudT = -1e9; });
 $('cDbg').checked = !!S.cal.debug;
 $('cDbg').addEventListener('change', () => { S.cal.debug = $('cDbg').checked; saveCal(); S.hudT = -1e9; });
 // asukohapaneelile vajutus avab ja sulgeb silumisinfo
