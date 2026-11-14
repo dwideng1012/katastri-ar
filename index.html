@@ -1113,7 +1113,7 @@ const POI = {
     { id: 'suplus', name: 'Supluskohad', g: 1, on: 1, k: ['hp_supluskoht'], ic: 'supluskoht' },
     { id: 'allikas', name: 'Allikad', g: 1, on: 0, k: ['hp_veekogu'], m: p => p.tyypnimi === 'allikas', ic: 'veekogu' },
     { id: 'veekogu', name: 'Järved, jõed ja ojad', g: 1, on: 0, k: ['hp_veekogu'], ic: 'veekogu' },
-    { id: 'vaatetorn', name: 'Vaatetornid ja -platvormid', g: 2, on: 1, k: ['hp_terviserada', 'hp_rajatis'], m: p => /vaatetorn|vaateplatvorm/.test(p.tyypnimi), ic: 'kylastus_vaatetorn' },
+    { id: 'vaatetorn', name: 'Vaatetornid ja -platvormid', g: 2, on: 1, k: ['hp_terviserada', 'hp_rajatis'], m: p => /vaatetorn|vaateplatvorm/.test(p.tyypnimi), ic: 'rajatis' },
     { id: 'tuletorn', name: 'Tuletornid', g: 2, on: 1, k: ['hp_rajatis'], m: p => p.tyypnimi === 'tuletorn', ic: 'rajatis' },
     { id: 'matkarada', name: 'Matkarajad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /matkarada|matkatee|loodusõpperada/.test(p.tyypnimi), ic: 'rmk_matkarada_j', line: p => /^(RMK matkarada|RMK matkatee|KeA KOV külastustaristu matkarada)$/.test(p.tyypnimi) },
     { id: 'lokke', name: 'Lõkke- ja puhkekohad, telkimisalad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /lõkkekoht|telkimisala|puhkekoht|metsaonn|metsamaja/.test(p.tyypnimi), ic: 'rmk_kylastustaristu' },
