@@ -424,11 +424,14 @@ function onMotion(e) {
   const mean = sum / M.buf.length; M.std = Math.sqrt(Math.max(0, sq / M.buf.length - mean * mean));
   if (M.std > CFG.moveStd) {
     M.lastMove = t; avgClear('liikumine');
-    if (S.courseOn && !(S.fix && S.fix.fast)) S.courseOn = false;   // kõnnid: autost väljas, kompass kehtib jälle
+    if (S.courseOn && !isFast()) S.courseOn = false;   // kõnnid: autost väljas, kompass kehtib jälle
     if (S.calRun && t > S.calRun.t0) { S.calRun = null; say('Liikusid, kalibreerimine katkestati. Proovi uuesti.'); }
   }
 }
 const isStill = () => M.seen && performance.now() - M.lastMove > CFG.stillMs;
+// Sõiduolek kehtib ainult värske näidu põhjal: kui GPS vaikib, ei tohi viimase näidu kiirus rakendust sõidurežiimi kinni jätta.
+const fixAge = () => S.fix ? Date.now() - S.fix.t : Infinity;
+const isFast = () => !!(S.fix && S.fix.fast && fixAge() < 4000);
 function say(t) { S.msg = t; S.msgT = performance.now(); }
 function avgClear(why) {   // why puudub = vaikne tühjendus (nt keskmistamine lülitati välja)
   const a = S.avg; if (!a.buf.length) return;
@@ -471,10 +474,11 @@ function drawChips() {   // olekumärgid minikaardi all: keskmistamine ja kohape
     let cls = '', txt;
     if (S.calRun) { cls = 'on'; txt = now < S.calRun.t0 ? 'Kalibreerin: seisa paigal' : 'Kalibreerin: ' + Math.round((now - S.calRun.t0) / 1000) + '/' + Math.round(CFG.calMs / 1000) + ' s, ' + S.calRun.k + ' näitu'; }
     else if (now - a.resetT < 3000) { cls = 'rst'; txt = 'Keskmine nullitud: ' + a.why; }
-    else if (!S.cal.avg && !S.fix.fast) txt = 'Keskmistamine väljas';
+    else if (fixAge() > 5000) { cls = 'rst'; txt = 'GPS-ilt pole uut näitu ' + Math.round(fixAge() / 1000) + ' s'; }
+    else if (!S.cal.avg && !isFast()) txt = 'Keskmistamine väljas';
     else if (!M.seen) txt = 'Keskmistamine väljas: kiirendusandur puudub';
     else if (a.buf.length >= 2) { cls = 'on'; txt = a.buf.length < S.cal.avgN ? 'Keskmine: ' + a.buf.length + '/' + S.cal.avgN + ' näitu' : 'Keskmine: viimased ' + S.cal.avgN + ' näitu'; }
-    else if (S.fix.fast) txt = 'Sõidad ' + Math.round(S.fix.speed * 3.6) + ' km/h: viimane näit' + (S.courseOn ? ', suund GPS-ist' : '');
+    else if (isFast()) txt = 'Sõidad ' + Math.round(S.fix.speed * 3.6) + ' km/h: viimane näit' + (S.courseOn ? ', suund GPS-ist' : '');
     else txt = isStill() ? 'Seisad paigal, kogun näite' : 'Liigud: viimane näit';
     el.className = cls; el.textContent = txt;
   }
@@ -1004,7 +1008,7 @@ function drawHud(cam) {
     rows = [];
     if (f && S.pos && S.origin) {
       const u = userAbs();
-      rows.push(['X ' + u[1].toFixed(1).replace('.', ',') + '  Y ' + u[0].toFixed(1).replace('.', ',') + '  ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m', f.acc > 10 ? 'w' : '']);
+      rows.push(['X ' + u[1].toFixed(1).replace('.', ',') + '  Y ' + u[0].toFixed(1).replace('.', ',') + '  ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m' + (!S.sim && fixAge() > 5000 ? '  näit ' + Math.round(fixAge() / 1000) + ' s vana' : ''), f.acc > 10 || (!S.sim && fixAge() > 5000) ? 'w' : '']);
       if (S.geoErr) rows.push([S.geoErr, 'w']);
       if (S.here && !S.hereGuess) {
         rows.push([S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), '']);
@@ -1070,10 +1074,12 @@ function start() {
   if (!S.sim) startCamera();   // simulatsioonis (lauaarvuti) kaamerat ei küsita
 
   if (S.sim) onFix(S.sim[0], S.sim[1], 0, null, null);
-  else if (navigator.geolocation) navigator.geolocation.watchPosition(
-    p => onFix(p.coords.latitude, p.coords.longitude, p.coords.accuracy, p.coords.altitude, p.coords.altitudeAccuracy, p.coords.speed, p.coords.heading),
-    e => { S.geoErr = 'Asukoht: ' + e.message; },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  else if (navigator.geolocation) {
+    const got = p => onFix(p.coords.latitude, p.coords.longitude, p.coords.accuracy, p.coords.altitude, p.coords.altitudeAccuracy, p.coords.speed, p.coords.heading);
+    navigator.geolocation.watchPosition(got, e => { S.geoErr = 'Asukoht: ' + e.message; }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    // Kui uusi näite ei tule (nt telefon peatab paigal seistes asukoha uuendamise), küsitakse iga 5 s järel asukohta eraldi.
+    setInterval(() => { if (fixAge() > 5000 && document.visibilityState === 'visible') navigator.geolocation.getCurrentPosition(got, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }); }, 5000);
+  }
   else S.errs.push('Geolocation API puudub.');
 
   // Kas telefon toetab WebXR AR-i (ARCore)? Ainult info: seda oleks vaja joonte maailma külge lukustamiseks.
