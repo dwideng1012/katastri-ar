@@ -281,21 +281,33 @@ function boundaryDist(f, px, py) {  // lähim koht üksuse piiril: [kaugus, x, y
 // Naabri nurk võib olla keset minu piirilõiku, seepärast võrreldakse kaugust minu piirijoonest, mitte punkte.
 function buildStubs(here) {
   const tol = CFG.shareTol, step = 0.5, out = [], hb = here.bb;
-  const on = (x, y) => x >= hb[0] - tol && x <= hb[2] + tol && y >= hb[1] - tol && y <= hb[3] + tol &&
-    boundaryDist(here, x, y)[0] <= tol;
+  // Arvutus piirdub laaditud ala ümbrusega. Teemaa üksus võib olla kilomeetreid pikk ja kogu selle piiri
+  // läbikäimine pani telefoni sekunditeks seisma.
+  const lim = CFG.maxDraw + CFG.refetchDist + 20;
+  const out2 = (x0, y0, x1, y1) => Math.max(x0, x1) < -lim || Math.min(x0, x1) > lim || Math.max(y0, y1) < -lim || Math.min(y0, y1) > lim;
+  const segs = [];   // minu piiri lõigud, mis ulatuvad sellesse alasse
+  for (const r of here.rings) for (let i = 1; i < r.length; i++) {
+    const a = r[i - 1], b = r[i]; if (!out2(a[0] - tol, a[1] - tol, b[0] + tol, b[1] + tol) || !out2(a[0] + tol, a[1] + tol, b[0] - tol, b[1] - tol)) segs.push([a[0], a[1], b[0], b[1]]);
+  }
+  const dist = (x, y) => { let best = [Infinity, x, y]; for (const g of segs) { const d = ptSegDist(x, y, g[0], g[1], g[2], g[3]); if (d[0] < best[0]) best = d; } return best; };
+  const on = (x, y) => Math.abs(x) <= lim && Math.abs(y) <= lim && x >= hb[0] - tol && x <= hb[2] + tol && y >= hb[1] - tol && y <= hb[3] + tol &&
+    dist(x, y)[0] <= tol;
   for (const f of S.feats) {
     if (f === here || f.bb[0] > hb[2] + tol || f.bb[2] < hb[0] - tol || f.bb[1] > hb[3] + tol || f.bb[3] < hb[1] - tol) continue;
+    if (out2(f.bb[0], f.bb[1], f.bb[2], f.bb[3])) continue;
     for (const r of f.rings) {
       const pts = [];   // rõngas tihendatuna kuni 0,5 m sammuga; kolmas väärtus: kas punkt on minu piiril
       for (let i = 1; i < r.length; i++) {
-        const a = r[i - 1], b = r[i], n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
+        const a = r[i - 1], b = r[i];
+        if (out2(a[0], a[1], b[0], b[1])) { pts.push([a[0], a[1], false]); continue; }   // alast väljas: ei tihendata
+        const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
         for (let k = 0; k < n; k++) { const x = a[0] + (b[0] - a[0]) * k / n, y = a[1] + (b[1] - a[1]) * k / n; pts.push([x, y, on(x, y)]); }
       }
       const m = pts.length;
       if (m < 2 || !pts.some(p => p[2])) continue;
       for (const dir of [1, -1]) for (let i = 0; i < m; i++) {
         if (!pts[i][2] || pts[((i + dir) % m + m) % m][2]) continue;
-        const q = boundaryDist(here, pts[i][0], pts[i][1]);   // jupp algab täpselt minu piirilt
+        const q = dist(pts[i][0], pts[i][1]);   // jupp algab täpselt minu piirilt
         const line = [[q[1], q[2]]]; let left = CFG.stub, cx = q[1], cy = q[2];
         for (let j = 1; j < m && left > 0; j++) {
           const v = pts[((i + dir * j) % m + m) % m];
@@ -356,7 +368,7 @@ async function loadParcels() {
   const why = e => e.name === 'AbortError' ? 'WFS ei vastanud 15 sekundiga'
     : e.name === 'TypeError' ? 'päring ei läinud läbi: võrk puudub või CORS blokeerib (' + e.message + ')' : (e.message || String(e));
   let polys, points, pts = [];
-  for (const r of [CFG.radius, CFG.radiusWide]) {
+  for (const r of p.fast ? [CFG.radius] : [CFG.radius, CFG.radiusWide]) {   // sõites laiemat ala ei küsita
     // BBOX ja vastus on L-EST97-s, telgede järjekord ida,põhi (kontrollitud päris teenusega).
     const bbox = [o.E - r, o.N - r, o.E + r, o.N + r].map(v => v.toFixed(1)).join(',');
     const q = (layer, count, props) => CFG.wfs + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + layer +
@@ -500,7 +512,7 @@ function onFix(lat, lon, acc, alt, altAcc, speed, course) {
   if (!S.pos) S.pos = { E: uE, N: uN };
   if (performance.now() - S.lastTry < 5000) return;
   if (!S.fetchCenter) return void loadParcels();
-  if (Math.hypot(E - S.fetchCenter.E, N - S.fetchCenter.N) > CFG.refetchDist) loadParcels();
+  if (Math.hypot(E - S.fetchCenter.E, N - S.fetchCenter.N) > (fast ? 150 : CFG.refetchDist)) loadParcels();   // sõites harvem
 }
 
 /* ---------- orientatsioon ---------- */
@@ -768,7 +780,6 @@ function locate() {   // millisel üksusel seisad ja kui kaugel on selle lähim 
     for (const f of S.feats) { const d = boundaryDist(f, pe, pn)[0]; if (d < best) { best = d; here = f; } }
     guess = !!here;
   }
-  if (here && !here.stubs) here.stubs = buildStubs(here);
   S.here = here; S.hereGuess = guess; S.near = here ? boundaryDist(here, pe, pn) : null;
   let near = null, nd = Infinity, tgt = null;
   for (const p of S.pts) {
@@ -800,6 +811,7 @@ function draw(cam, W, H) {
     }
     if (showAll) { const ce = f.c[0] - pe, cn = f.c[1] - pn, d = Math.hypot(ce, cn); if (d < CFG.maxDraw) cen.push({ f, d, c: P.toCam(ce, cn, ground) }); }
   }
+  if (mode === 1 && here && !here.stubs) here.stubs = buildStubs(here);   // arvutatakse ainult siis, kui jooned on sees
   if (mode === 1 && here) for (const line of here.stubs || []) {   // naabrite piiride algused
     let pc = null, pE = 0, pN = 0;
     for (const v of line) {
