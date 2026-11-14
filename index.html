@@ -1113,13 +1113,13 @@ const POI = {
     { id: 'suplus', name: 'Supluskohad', g: 1, on: 1, k: ['hp_supluskoht'], ic: 'supluskoht' },
     { id: 'allikas', name: 'Allikad', g: 1, on: 0, k: ['hp_veekogu'], m: p => p.tyypnimi === 'allikas', ic: 'veekogu' },
     { id: 'veekogu', name: 'Järved, jõed ja ojad', g: 1, on: 0, k: ['hp_veekogu'], ic: 'veekogu' },
-    { id: 'vaatetorn', name: 'Vaatetornid ja -platvormid', g: 2, on: 1, k: ['hp_terviserada', 'hp_rajatis'], m: p => /vaatetorn|vaateplatvorm/.test(p.tyypnimi), ic: 'rajatis' },
+    { id: 'vaatetorn', name: 'Vaatetornid ja -platvormid', g: 2, on: 1, k: ['hp_terviserada', 'hp_rajatis'], m: p => /vaatetorn|vaateplatvorm/.test(p.tyypnimi), ic: 'rmk_kylastustaristu|Vaatetorn' },
     { id: 'tuletorn', name: 'Tuletornid', g: 2, on: 1, k: ['hp_rajatis'], m: p => p.tyypnimi === 'tuletorn', ic: 'rajatis' },
-    { id: 'matkarada', name: 'Matkarajad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /matkarada|matkatee|loodusõpperada/.test(p.tyypnimi), ic: 'rmk_matkarada_j', line: p => /^(RMK matkarada|RMK matkatee|KeA KOV külastustaristu matkarada)$/.test(p.tyypnimi) },
-    { id: 'lokke', name: 'Lõkke- ja puhkekohad, telkimisalad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /lõkkekoht|telkimisala|puhkekoht|metsaonn|metsamaja/.test(p.tyypnimi), ic: 'rmk_kylastustaristu' },
-    { id: 'ratas', name: 'Jalgrattarajad', g: 2, on: 0, k: ['hp_terviserada'], m: p => /jalgrattarada/.test(p.tyypnimi), ic: 'rmk_rattarada_j' },
+    { id: 'matkarada', name: 'Matkarajad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /matkarada|matkatee|loodusõpperada/.test(p.tyypnimi), ic: 'rmk_kylastustaristu|Matkarada', line: p => /^(RMK matkarada|RMK matkatee|KeA KOV külastustaristu matkarada)$/.test(p.tyypnimi) },
+    { id: 'lokke', name: 'Lõkke- ja puhkekohad, telkimisalad', g: 2, on: 1, k: ['hp_terviserada'], m: p => /lõkkekoht|telkimisala|puhkekoht|metsaonn|metsamaja/.test(p.tyypnimi), ic: 'rmk_kylastustaristu|Lõkkekoht' },
+    { id: 'ratas', name: 'Jalgrattarajad', g: 2, on: 0, k: ['hp_terviserada'], m: p => /jalgrattarada/.test(p.tyypnimi), ic: 'rmk_kylastustaristu|Jalgrattarada' },
     { id: 'terviserada', name: 'Terviserajad', g: 2, on: 0, k: ['hp_terviserada', 'hp_spordiobjekt'], m: p => p.tyypnimi === 'eesti terviserada', ic: 'eestiterviserada_j' },
-    { id: 'rmkmuu', name: 'Muu külastustaristu (RMK, Keskkonnaamet)', g: 2, on: 1, k: ['hp_terviserada'], ic: 'rmk_kylastustaristu' },
+    { id: 'rmkmuu', name: 'Muu külastustaristu (RMK, Keskkonnaamet)', g: 2, on: 1, k: ['hp_terviserada'], ic: 'rmk_kylastustaristu|Muu külastustaristu objekt' },
     { id: 'parkla', name: 'Parklad', g: 3, on: 0, k: ['hp_parkla'], ic: 'parkla' },
     { id: 'majutus', name: 'Majutus', g: 3, on: 0, k: ['hp_majutus'], ic: 'majutus' },
     { id: 'toitlustus', name: 'Toitlustus', g: 3, on: 0, k: ['hp_toitlustus'], ic: 'toitlustus' },
@@ -1134,10 +1134,20 @@ const POI = {
     { id: 'haldus', name: 'Haldus, pääste ja ohutus', g: 3, on: 0, k: ['hp_administratiivkeskus', 'hp_riigiasutus', 'hp_valisesindus', 'hp_politsei', 'hp_piirivalve', 'hp_paaste', 'hp_veeohutus', 'hp_varjumiskoht', 'hp_ohtlik_ettevote', 'hp_jaatmejaam'], ic: 'paastekomando' }
   ],
   icons: {},
-  icon(name) {   // kihi ikoon GeoServeri legendist, ilma tekstita
+  icon(name) {   // kihi ikoon GeoServeri legendist, ilma tekstita. Nimi võib olla kujul 'kiht|reegel': siis tuleb stiili selle reegli ikoon (nt RMK vaatetorn).
     let im = this.icons[name];
-    if (!im) { im = this.icons[name] = new Image(); im.src = this.wms + '?service=WMS&version=1.1.1&request=GetLegendGraphic&layer=huvipunkt:' + name + '&format=image/png&width=24&height=24&transparent=true&LEGEND_OPTIONS=forceLabels:off'; }
+    if (!im) { const [lay, rule] = name.split('|'); im = this.icons[name] = new Image(); im.src = this.wms + '?service=WMS&version=1.1.1&request=GetLegendGraphic&layer=huvipunkt:' + lay + '&format=image/png&width=24&height=24&transparent=true&LEGEND_OPTIONS=forceLabels:off' + (rule ? '&RULE=' + encodeURIComponent(rule) : ''); }
     return im.complete && im.naturalWidth > 0 ? im : null;
+  },
+  // RMK ja Keskkonnaameti külastustaristul on teenuse stiilis igal tüübil oma ikoon; valik käib tüübinime järgi.
+  rmkRules: [[/vaatetorn/, 'Vaatetorn'], [/lõkkekoht/, 'Lõkkekoht'], [/telkimis/, 'Telkimisala'], [/metsaonn/, 'Metsaonn'], [/metsamaja/, 'Metsamaja'], [/loodusmaja/, 'Loodusmaja'],
+             [/külastuskeskus/, 'Külastuskeskus'], [/õpperada/, 'Õpperada'], [/jalgrattarada/, 'Jalgrattarada'], [/matkarada|matkatee/, 'Matkarada']],
+  icOf(q, c) {
+    if (q.kiht !== 'hp_terviserada' || !/RMK|KeA/.test(q.tyypnimi || '')) return c.ic;
+    const t = q.tyypnimi.toLowerCase();
+    if (/^kea/.test(t)) return /vaatetorn/.test(t) ? 'kea_kylastustaristu|Vaatetorn' : /puhkekoht/.test(t) ? 'kea_kylastustaristu|Puhkekoht' : c.ic;
+    for (const [re, rule] of this.rmkRules) if (re.test(t)) return 'rmk_kylastustaristu|' + rule;
+    return c.ic;
   },
   // Legendipilt on 26 x 48 px: ülemises ruudus ikoon, all tühi tekstirida. Joonistada tohib ainult ülemist ruutu, muidu surutakse ikoon lapikuks.
   draw(c, im, x, y, size) { const q = Math.min(im.naturalWidth, im.naturalHeight); c.drawImage(im, 0, 0, q, q, x, y, size, size); }
@@ -1172,7 +1182,7 @@ async function loadPoi() {
         if (!c || !PS.on[c.id] || !isFinite(E) || !isFinite(N)) continue;
         if (!q.nimi && !PS.unnamed) continue;
         if (Math.hypot(E - o.E, N - o.N) > r * 1.5) continue;   // rada, mis ainult läbib ala, aga mille tähispunkt on kaugel
-        list.push({ id: String(q.poi_id != null ? q.poi_id : f.id), name: q.nimi || c.name, alias: q.alias || '', type: q.tyypnimi || '', cat: c, line: !!(c.line && c.line(q)),
+        list.push({ id: String(q.poi_id != null ? q.poi_id : f.id), name: q.nimi || c.name, alias: q.alias || '', type: q.tyypnimi || '', cat: c, ic: POI.icOf(q, c), line: !!(c.line && c.line(q)),
                     addr: q.aadress || '', note: q.markus || '', url: q.url || q.www || '', E, N, e: E - o.E, n: N - o.N, d: null });
       }
     } catch (e) {
@@ -1228,7 +1238,7 @@ function drawPoi(cam, W, H) {
     ctx.beginPath(); ctx.arc(it.qx, it.hy, 4, 0, 7); ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1.5; ctx.stroke();
   }
   for (const it of items) {   // 3. samm: ikoon ja selle kohal nimi. Kasti ei ole, teksti hoiab loetavana tume kontuur.
-    const iy = it.y + TH + 2, ic = POI.icon(it.p.cat.ic);
+    const iy = it.y + TH + 2, ic = POI.icon(it.p.ic);
     if (it.isT) { ctx.beginPath(); ctx.arc(it.cx, iy + IC / 2, IC / 2 + 3, 0, 7); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 5; ctx.stroke(); ctx.strokeStyle = '#ffd24a'; ctx.lineWidth = 2.5; ctx.stroke(); }
     if (ic) POI.draw(ctx, ic, it.cx - IC / 2, iy, IC);
     else { ctx.beginPath(); ctx.arc(it.cx, iy + IC / 2, 9, 0, 7); ctx.fillStyle = POI.colors[it.p.cat.g]; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1.5; ctx.stroke(); }
