@@ -107,6 +107,7 @@
       <button id="bRotL">⟲</button><button id="bRotR">⟳</button>
     </div>
     <label class="chk noar"><input id="cDecl" type="checkbox"> Arvesta magnetilist deklinatsiooni (kompass → tõeline põhi)</label>
+    <label class="chk noar"><input id="cOrto" type="checkbox"> Ortofoto minikaardil</label>
     <label class="chk noar"><input id="cDbg" type="checkbox"> Näita silumisinfot</label>
     <div class="row"><button id="bCalClose">Sulge seaded</button></div>
   </div>
@@ -115,7 +116,7 @@
 <div id="start">
   <h1>Piirimärgi otsija</h1>
   <p>Prototüüp. Vajab kaamera, asukoha ja liikumisandurite luba. Sinu asukoha ümbrus (~200 m kast)
-     saadetakse päringuna Maa- ja Ruumiameti WFS-teenusele.</p>
+     saadetakse päringuna Maa- ja Ruumiameti WFS- ja WMS-teenusele (katastriandmed ja ortofoto).</p>
   <p>Rakendus juhatab piirimärgi lähedale: GPS-i ja kompassi viga on tavaliselt mitu meetrit, viimased meetrid tuleb märki otsida silmaga. See ei asenda piiri mõõdistamist.</p>
   <button id="bStart">Käivita</button>
 </div>
@@ -141,6 +142,10 @@ const CFG = {
   radius: 200,        // m, BBOX poolkülg asukoha ümber
   radiusWide: 600,    // m, hõreda asustusega kohas: kui 200 m sees on alla minPoints piiripunkti, küsitakse laiemalt
   minPoints: 5,
+  fastSpeed: 2.8,     // m/s (10 km/h): sellest kiiremini ei keskmistata ja suund võetakse GPS-i liikumissuunast
+  orto: 'https://kaart.maaamet.ee/wms/fotokaart',   // ortofoto minikaardi alla, kiht EESTIFOTO, EPSG:3301
+  ortoHalf: 200,      // m, ortofoto pildi poolkülg laadimiskoha ümber
+  ortoPx: 512,
   refetchDist: 80,    // m, kui kaugele liikudes andmed uuesti küsitakse
   maxFeatures: 1000,
   maxDraw: 250,       // m, kaugemaid piirilõike ei joonistata
@@ -185,10 +190,11 @@ const S = {
   ori: null, oriAbs: false, oriSrc: '', gotAbs: false, iosOff: null,
   simOri: null, sim: null,
   nudge: [0, 0],      // asukoha käsitsi nihe, m [ida, põhi]
-  cal: { hdg: 0, fov: 65, h: 1.5, decl: true, lines: 0, avg: true, avgN: 10, debug: false },
+  cal: { hdg: 0, fov: 65, h: 1.5, decl: true, lines: 0, avg: true, avgN: 10, debug: false, orto: true },
   hdg: 0, here: null, hereGuess: false, near: null, nearV: null, xr: 'kontrollin…',
   avg: { buf: [], resetT: -1e9, why: '', resets: 0 },
   calib: null, calRun: null, msg: '', msgT: -1e9,
+  courseOn: false, courseOff: 0, hdgRaw: 0, hdgRawT: -1e9, orto: null, started: false,
   ar: null, arErr: '', camErr: '', P: null, raf: 0, oriT: -1e9, errs: [], geoErr: '', lastT: 0, hudT: 0, fpx: 600
 };
 try { Object.assign(S.cal, JSON.parse(localStorage.getItem('katasterAR.cal') || '{}')); } catch (e) {}
@@ -373,10 +379,20 @@ async function loadParcels() {
                   (points.status === 'fulfilled' && points.value.numberMatched > points.value.features.length);
     if (S.ar && S.ar.aligned && old) { S.ar.A[0] += old.E - o.E; S.ar.A[1] += old.N - o.N; S.ar.undo = []; }
     S.here = null; S.near = null; S.nearP = null; S.tgtP = null;   // vanad objektid kuuluvad eelmise päringu teljestikku
+    loadOrto(o);
   }
   S.fetchErr = polys.status === 'rejected' ? 'Piiride kiht: ' + why(polys.reason) : '';
   S.ptErr = points.status === 'rejected' ? 'Piiripunktide kiht: ' + why(points.reason) : '';
   S.loading = false;
+}
+
+// Ortofoto minikaardi alla: üks WMS-pilt laadimiskoha ümber, L-EST97-s, seega kattub katastriga ilma teisendamata.
+function loadOrto(o) {
+  if (!S.cal.orto) { S.orto = null; return; }
+  const h = CFG.ortoHalf, im = new Image();
+  im.onload = () => { if (S.origin === o) S.orto = { im, E: o.E, N: o.N, h }; };
+  im.src = CFG.orto + '?service=WMS&version=1.1.1&request=GetMap&layers=EESTIFOTO&styles=&srs=EPSG:3301&format=image/jpeg&width=' + CFG.ortoPx +
+    '&height=' + CFG.ortoPx + '&bbox=' + [o.E - h, o.N - h, o.E + h, o.N + h].map(v => v.toFixed(1)).join(',');
 }
 
 /* ---------- paigalseis, libisev keskmine ja kohapealne kalibreerimine ----------
@@ -396,6 +412,7 @@ function onMotion(e) {
   const mean = sum / M.buf.length; M.std = Math.sqrt(Math.max(0, sq / M.buf.length - mean * mean));
   if (M.std > CFG.moveStd) {
     M.lastMove = t; avgClear('liikumine');
+    if (S.courseOn && !(S.fix && S.fix.fast)) S.courseOn = false;   // kõnnid: autost väljas, kompass kehtib jälle
     if (S.calRun && t > S.calRun.t0) { S.calRun = null; say('Liikusid, kalibreerimine katkestati. Proovi uuesti.'); }
   }
 }
@@ -442,9 +459,10 @@ function drawChips() {   // olekumärgid minikaardi all: keskmistamine ja kohape
     let cls = '', txt;
     if (S.calRun) { cls = 'on'; txt = now < S.calRun.t0 ? 'Kalibreerin: seisa paigal' : 'Kalibreerin: ' + Math.round((now - S.calRun.t0) / 1000) + '/' + Math.round(CFG.calMs / 1000) + ' s, ' + S.calRun.k + ' näitu'; }
     else if (now - a.resetT < 3000) { cls = 'rst'; txt = 'Keskmine nullitud: ' + a.why; }
-    else if (!S.cal.avg) txt = 'Keskmistamine väljas';
+    else if (!S.cal.avg && !S.fix.fast) txt = 'Keskmistamine väljas';
     else if (!M.seen) txt = 'Keskmistamine väljas: kiirendusandur puudub';
     else if (a.buf.length >= 2) { cls = 'on'; txt = a.buf.length < S.cal.avgN ? 'Keskmine: ' + a.buf.length + '/' + S.cal.avgN + ' näitu' : 'Keskmine: viimased ' + S.cal.avgN + ' näitu'; }
+    else if (S.fix.fast) txt = 'Sõidad ' + Math.round(S.fix.speed * 3.6) + ' km/h: viimane näit' + (S.courseOn ? ', suund GPS-ist' : '');
     else txt = isStill() ? 'Seisad paigal, kogun näite' : 'Liigud: viimane näit';
     el.className = cls; el.textContent = txt;
   }
@@ -457,12 +475,28 @@ function drawChips() {   // olekumärgid minikaardi all: keskmistamine ja kohape
 }
 
 /* ---------- asukoht ---------- */
-function onFix(lat, lon, acc, alt, altAcc) {
+function onFix(lat, lon, acc, alt, altAcc, speed, course) {
   const g = gpsToLest(lat, lon), E = g[0], N = g[1];   // L-EST97, laama nihe maha lahutatud
   let uE = E, uN = N;   // uE/uN on kuvamiseks kasutatav asukoht: paigal seistes akna keskmine, muidu viimane näit
-  if (!S.sim && S.cal.avg && isStill()) { const m = avgAdd(E, N, acc); uE = m[0]; uN = m[1]; } else avgClear();
+  // Ühtlast sõitu kiirendusandur ei näe (autos on telefon "paigal"), seda näitab ainult GPS-i kiirus.
+  const fast = speed != null && speed > CFG.fastSpeed;
+  if (fast) {
+    avgClear('kiirus');
+    if (S.calRun) { S.calRun = null; say('Liigud, kalibreerimine katkestati.'); }
+    // Autos on kompass kasutu. Suunaks võetakse GPS-i liikumissuund: kompassi ja liikumissuuna vahe silutakse
+    // ja lahutatakse maha, nii et telefoni pööramine mõjub endiselt, aga keskmiselt vaatab telefon sõidusuunas.
+    if (course != null && !isNaN(course) && S.ori && performance.now() - S.hdgRawT < 1000) {
+      const wrap = a => Math.atan2(Math.sin(a), Math.cos(a)), tgt = wrap(S.hdgRaw - (course - LEST.conv(lon)) * D2R);
+      S.courseOff = S.courseOn ? S.courseOff + wrap(tgt - S.courseOff) * 0.3 : tgt; S.courseOn = true;
+    }
+  } else {
+    // Peatudes (nt ristmikul) jääb liikumissuuna parandus kehtima, sest auto mõju kompassile on sama.
+    // See lõpeb siis, kui hakkad kõndima (vt onMotion) või kui kiirendusandurit ei ole.
+    if (!M.seen) S.courseOn = false;
+    if (!S.sim && S.cal.avg && isStill()) { const m = avgAdd(E, N, acc); uE = m[0]; uN = m[1]; } else avgClear();
+  }
   if (S.calRun && performance.now() >= S.calRun.t0) { const c = S.calRun, w = 1 / Math.pow(Math.max(acc || 5, 1), 2); c.w += w; c.e += E * w; c.n += N * w; c.k++; }
-  S.fix = { lat, lon, E, N, uE, uN, acc, alt, altAcc, t: Date.now() }; S.geoErr = '';
+  S.fix = { lat, lon, E, N, uE, uN, acc, alt, altAcc, speed, fast, t: Date.now() }; S.geoErr = '';
   if (!S.pos) S.pos = { E: uE, N: uN };
   if (performance.now() - S.lastTry < 5000) return;
   if (!S.fetchCenter) return void loadParcels();
@@ -498,11 +532,15 @@ function camera() {
   const abs = S.ori ? S.oriAbs : true;               // simulatsioonis on põhjasuund kokkuleppeline
   const decl = (S.ori && abs && S.cal.decl && S.fix) ? declination(S.fix.lat, S.fix.lon) : 0;
   const conv = (S.ori && abs && S.fix) ? LEST.conv(S.fix.lon) : 0;   // kompass näitab tõelist põhja, joonistatakse kaardi põhja järgi
-  const R = rotMat(o.alpha - decl + conv - S.cal.hdg, o.beta, o.gamma);
-  const fE = -R[2], fN = -R[5], fU = -R[8];                // tagakaamera vaatab piki seadme -Z telge
-  const hdg = Math.hypot(fE, fN) > 0.35 ? Math.atan2(fE, fN) : Math.atan2(R[1], R[4]);
+  // tagakaamera vaatab piki seadme -Z telge; otse alla vaadates võetakse suund telefoni ülaservast
+  const head = R => Math.hypot(R[2], R[5]) > 0.35 ? Math.atan2(-R[2], -R[5]) : Math.atan2(R[1], R[4]);
+  let alpha = o.alpha - decl + conv - S.cal.hdg, R = rotMat(alpha, o.beta, o.gamma), hdg = head(R);
+  if (S.ori) { S.hdgRaw = hdg; S.hdgRawT = performance.now(); }   // kompassi suund enne liikumissuuna parandust
+  const byCourse = !!(S.ori && S.courseOn);
+  if (byCourse) { alpha += S.courseOff * R2D; R = rotMat(alpha, o.beta, o.gamma); hdg = head(R); }
+  const fU = -R[8];
   S.hdg = hdg;
-  return { R, hdg, pitch: Math.asin(Math.max(-1, Math.min(1, fU))), decl, conv, abs,
+  return { R, hdg, pitch: Math.asin(Math.max(-1, Math.min(1, fU))), decl, conv, abs, byCourse,
            src: S.ori ? S.oriSrc : 'simulatsioon (lohista vaadet)' };
 }
 function screenAngle() {
@@ -861,8 +899,12 @@ function drawRadar(cam, W) {   // pealtvaade, vaatesuund üleval
   const [pe, pn] = userENU(), k = (s / 2) / CFG.radarRange, hdg = cam ? cam.hdg : 0;
   rctx.save(); rctx.beginPath(); rctx.arc(s / 2, s / 2, s / 2, 0, 7); rctx.clip();
   rctx.translate(s / 2, s / 2); rctx.rotate(-hdg);
-  const all = new Path2D();
-  rctx.globalAlpha = 0.55;
+  const all = new Path2D(), ph = S.cal.orto && S.orto && S.origin ? S.orto : null;
+  if (ph) {   // pilt katab ala [E-h, E+h] x [N-h, N+h]; kohalikus teljestikus on selle keskpunkt (ph.E - origin.E, ph.N - origin.N)
+    const cx = ph.E - S.origin.E, cy = ph.N - S.origin.N;
+    rctx.drawImage(ph.im, (cx - ph.h - pe) * k, -(cy + ph.h - pn) * k, 2 * ph.h * k, 2 * ph.h * k);
+  }
+  rctx.globalAlpha = ph ? 0.35 : 0.55;
   for (const f of S.feats) {   // üksuse täide omandivormi värviga, nagu teemakaardil
     if (f.bb[0] - pe > CFG.radarRange || pe - f.bb[2] > CFG.radarRange || f.bb[1] - pn > CFG.radarRange || pn - f.bb[3] > CFG.radarRange) continue;
     const path = new Path2D();
@@ -914,7 +956,7 @@ function drawHud(cam) {
   if (a) { if (f) add('GPS täpsus ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m (ei kasutata)'); }
   else if (!f) add(S.geoErr || 'GPS: ootan asukohta…', 'w');
   else {
-    add('GPS täpsus ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m' + (S.sim ? '  [SIMULATSIOON]' : '  vanus ' + Math.round((Date.now() - f.t) / 1000) + ' s'),
+    add('GPS täpsus ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m' + (S.sim ? '  [SIMULATSIOON]' : '  vanus ' + Math.round((Date.now() - f.t) / 1000) + ' s') + (f.speed != null ? '  kiirus ' + Math.round(f.speed * 3.6) + ' km/h' : ''),
         f.acc > 10 ? 'w' : '');
     add(f.lat.toFixed(6) + ', ' + f.lon.toFixed(6) + (f.alt != null ? '  kõrgus ' + f.alt.toFixed(0) + ' m (ei kasutata)' : ''));
     if (S.pos && S.origin) { const u = userAbs(); add('L-EST97 X ' + u[1].toFixed(1).replace('.', ',') + '  Y ' + u[0].toFixed(1).replace('.', ',')); }
@@ -927,6 +969,7 @@ function drawHud(cam) {
     add('Suund ' + (((cam.hdg * R2D) % 360 + 360) % 360).toFixed(0) + '°  kalle ' + String(Math.round(cam.pitch * R2D)) + '°');
     add('  dekl ' + sg(cam.decl) + '°  koonduvus ' + sg(cam.conv) + '°  parandus ' + sg(S.cal.hdg) + '°');
     add('  ' + cam.src, cam.abs ? '' : 'w');
+    if (cam.byCourse) add('  Suund GPS-i liikumissuunast, kompassi nihe ' + sg(S.courseOff * R2D) + '°', 'w');
     if (!cam.abs) add('  Põhjasuund teadmata: joonte suund on vale', 'e');
   }
   add('Laaditud: ' + S.pts.length + ' piiripunkti, ' + S.feats.length + ' üksust, ±' + (S.fetchR || CFG.radius) + ' m' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : ''));
@@ -1016,7 +1059,7 @@ function start() {
 
   if (S.sim) onFix(S.sim[0], S.sim[1], 0, null, null);
   else if (navigator.geolocation) navigator.geolocation.watchPosition(
-    p => onFix(p.coords.latitude, p.coords.longitude, p.coords.accuracy, p.coords.altitude, p.coords.altitudeAccuracy),
+    p => onFix(p.coords.latitude, p.coords.longitude, p.coords.accuracy, p.coords.altitude, p.coords.altitudeAccuracy, p.coords.speed, p.coords.heading),
     e => { S.geoErr = 'Asukoht: ' + e.message; },
     { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   else S.errs.push('Geolocation API puudub.');
@@ -1029,6 +1072,13 @@ function start() {
 
   const wake = () => { if (navigator.wakeLock && document.visibilityState === 'visible') navigator.wakeLock.request('screen').catch(() => {}); };
   wake(); document.addEventListener('visibilitychange', wake);
+  // Pärast ekraani lukustamist jääb kaameravoog seisma ja pilt hangub: nähtavaks saades käivitatakse kaamera uuesti.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    avgClear(); M.buf.length = 0; M.lastMove = performance.now();
+    if (!S.sim && !S.ar) { stopCamera(); startCamera(); }
+  });
+  S.started = true;
   S.raf = requestAnimationFrame(frame);
 }
 $('bStart').addEventListener('click', start);
@@ -1090,6 +1140,8 @@ bindRange('rFov', 'oFov', 'fov', v => v.toFixed(0) + '°');
 bindRange('rH', 'oH', 'h', v => v.toFixed(1) + ' m');
 if (!(S.cal.avgN >= 3 && S.cal.avgN <= 30)) S.cal.avgN = 10;
 bindRange('rAvgN', 'oAvgN', 'avgN', v => String(v));
+$('cOrto').checked = !!S.cal.orto;
+$('cOrto').addEventListener('change', () => { S.cal.orto = $('cOrto').checked; saveCal(); if (S.cal.orto && S.origin) loadOrto(S.origin); else S.orto = null; S.hudT = -1e9; });
 $('cDbg').checked = !!S.cal.debug;
 $('cDbg').addEventListener('change', () => { S.cal.debug = $('cDbg').checked; saveCal(); S.hudT = -1e9; });
 // asukohapaneelile vajutus avab ja sulgeb silumisinfo
