@@ -78,7 +78,6 @@
     <button id="bCal">Seaded</button>
     <button id="bReload" class="noar">Lae uuesti</button>
     <button id="bLines" class="noar"></button>
-    <button id="bNext" class="noar">Järgmine</button>
     <button id="bNear" class="noar">Lähim</button>
     <button id="bHere" class="noar">Seisan sellel punktil</button>
     <button id="bAR" class="noar" hidden>Lukusta (AR)</button>
@@ -108,6 +107,8 @@
       <button id="bRotL">⟲</button><button id="bRotR">⟳</button>
     </div>
     <label class="chk noar"><input id="cDecl" type="checkbox"> Arvesta magnetilist deklinatsiooni (kompass → tõeline põhi)</label>
+    <label class="chk noar"><input id="cDbg" type="checkbox"> Näita silumisinfot</label>
+    <div class="row"><button id="bCalClose">Sulge seaded</button></div>
   </div>
 </div>
 
@@ -176,7 +177,7 @@ const S = {
   ori: null, oriAbs: false, oriSrc: '', gotAbs: false, iosOff: null,
   simOri: null, sim: null,
   nudge: [0, 0],      // asukoha käsitsi nihe, m [ida, põhi]
-  cal: { hdg: 0, fov: 65, h: 1.5, decl: true, lines: 0, avg: true, avgN: 10 },
+  cal: { hdg: 0, fov: 65, h: 1.5, decl: true, lines: 0, avg: true, avgN: 10, debug: false },
   hdg: 0, here: null, hereGuess: false, near: null, nearV: null, xr: 'kontrollin…',
   avg: { buf: [], resetT: -1e9, why: '', resets: 0 },
   calib: null, calRun: null, msg: '', msgT: -1e9,
@@ -923,7 +924,17 @@ function drawHud(cam) {
   if (S.arErr) add(S.arErr, 'e');
   if (S.camErr && !a) add(S.camErr, 'e');
   for (const e of S.errs) add(e, 'e');
-  hud.replaceChildren(...L.map(([t, c]) => { const d = document.createElement('div'); d.textContent = t; if (c) d.className = c; return d; }));
+  let rows = L;
+  if (!S.cal.debug && !a) {   // tavavaade: ainult enda asukoht ja veateated; kogu silumisinfo lülitatakse sisse seadetest
+    rows = [];
+    if (f && S.pos && S.origin) {
+      const u = userAbs();
+      rows.push(['X ' + u[1].toFixed(1).replace('.', ',') + '  Y ' + u[0].toFixed(1).replace('.', ',') + '  ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m', f.acc > 10 ? 'w' : '']);
+      if (S.geoErr) rows.push([S.geoErr, 'w']);
+    } else rows.push([S.geoErr || 'GPS: ootan asukohta…', 'w']);
+    for (const r of L) if (r[1] === 'e') rows.push(r);
+  }
+  hud.replaceChildren(...rows.map(([t, c]) => { const d = document.createElement('div'); d.textContent = t; if (c) d.className = c; return d; }));
 }
 function frame(t) {
   S.raf = requestAnimationFrame(frame);
@@ -993,6 +1004,7 @@ function start() {
 }
 $('bStart').addEventListener('click', start);
 $('bCal').addEventListener('click', () => { $('cal').hidden = !$('cal').hidden; });
+$('bCalClose').addEventListener('click', () => { $('cal').hidden = true; });
 $('bReload').addEventListener('click', () => { loadParcels(); });
 $('bN0').addEventListener('click', () => { if (!S.ar) { S.nudge = [0, 0]; S.calib = null; S.calRun = null; } });
 $('bHere').addEventListener('click', () => { calStart(); drawTarget(); });
@@ -1019,12 +1031,7 @@ if (![0, 1, 2].includes(S.cal.lines)) S.cal.lines = 0;
 function showLinesBtn() { $('bLines').textContent = 'Jooned: ' + ['ei', 'oma üksus', 'kõik'][S.cal.lines]; }
 $('bLines').addEventListener('click', () => { S.cal.lines = (S.cal.lines + 1) % 3; saveCal(); showLinesBtn(); });
 showLinesBtn();
-// Sihtpunkti valik: "Järgmine punkt" käib läbi 12 lähimat, "Lähim" järgib alati lähimat, postile vajutus valib selle
-$('bNext').addEventListener('click', () => {
-  const list = S.pts.filter(p => p.d != null).sort((a, b) => a.d - b.d).slice(0, 12); if (!list.length) return;
-  const i = list.indexOf(S.tgtP);
-  S.tgt = list[(i + 1) % list.length].nr; locate(); drawTarget();
-});
+// Sihtpunkti valik: "Lähim" järgib alati lähimat punkti, täpile vajutus valib selle
 $('bNear').addEventListener('click', () => { S.tgt = null; locate(); drawTarget(); });
 cv.addEventListener('click', e => {
   if (S.ar) return;
@@ -1054,6 +1061,8 @@ bindRange('rFov', 'oFov', 'fov', v => v.toFixed(0) + '°');
 bindRange('rH', 'oH', 'h', v => v.toFixed(1) + ' m');
 if (!(S.cal.avgN >= 3 && S.cal.avgN <= 30)) S.cal.avgN = 10;
 bindRange('rAvgN', 'oAvgN', 'avgN', v => String(v));
+$('cDbg').checked = !!S.cal.debug;
+$('cDbg').addEventListener('change', () => { S.cal.debug = $('cDbg').checked; saveCal(); S.hudT = -1e9; });
 $('cDecl').checked = !!S.cal.decl;
 $('cDecl').addEventListener('change', () => { S.cal.decl = $('cDecl').checked; saveCal(); });
 
