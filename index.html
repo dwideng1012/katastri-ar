@@ -35,6 +35,12 @@
   .aronly{display:none!important}
   .ar .aronly{display:revert!important}
   .ar .noar{display:none!important}
+  .ar .row.aronly{display:flex!important}
+  #lockbar{position:fixed;left:0;right:0;top:0;padding:calc(6px + env(safe-area-inset-top)) 8px 6px;text-align:center;
+    font-size:16px;font-weight:600;pointer-events:none;background:rgba(150,35,25,.92)}
+  #lockbar.s1{background:rgba(150,100,0,.92)} #lockbar.s2{background:rgba(20,115,55,.92)}
+  .ar #hud{top:calc(34px + env(safe-area-inset-top))} .ar #radar{top:calc(40px + env(safe-area-inset-top))}
+  #bLock{background:#0b6bcb;border-color:#0b6bcb} #bLock.s2{background:#14733a;border-color:#14733a}
   .ar #cam{display:none}   /* AR-lukus näitab kaamerapilti brauser ise; tume videoelement kataks selle kinni */
   #bAR{background:#0b6bcb;border-color:#0b6bcb}
   #start{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:center;gap:14px;
@@ -47,6 +53,7 @@
 <body>
 <video id="cam" playsinline muted autoplay></video>
 <canvas id="ar"></canvas>
+<div id="lockbar" class="aronly"></div>
 <div id="hud"></div>
 <canvas id="radar"></canvas>
 
@@ -56,13 +63,11 @@
     <button id="bReload" class="noar">Lae andmed uuesti</button>
     <button id="bAll" class="noar"></button>
     <button id="bAR" class="noar" hidden>Lukusta (AR)</button>
-    <button id="bLock" class="aronly">Lukusta punkt</button>
-    <button id="bRot" class="aronly">Pööra 2. punktile</button>
-    <button id="bRotL" class="aronly">⟲</button><button id="bRotR" class="aronly">⟳</button>
+    <button id="bLock" class="aronly">Lukusta 1. punkt</button>
     <button id="bUndo" class="aronly">Tagasi</button>
     <button id="bExit" class="aronly">Välju</button>
   </div>
-  <div class="aronly"><small>Sihi rist päris piirimärgile maas ja vajuta "Lukusta punkt". Jooni saab ka sõrmega lohistada.</small></div>
+  <div class="aronly"><small>Sihi rist päris piirimärgile maas ja vajuta lukustusnuppu. Jooni saab ka sõrmega lohistada.</small></div>
   <div id="cal" hidden>
     <label class="noar">Suuna parandus <small>(+ nihutab jooni vasakule)</small> <output id="oHdg"></output>
       <input id="rHdg" type="range" min="-20" max="20" step="0.5"></label>
@@ -75,6 +80,10 @@
       <button data-n="l">←</button><button data-n="r">→</button>
       <button data-n="f">↑ kaugemale</button><button data-n="b">↓ lähemale</button>
       <button id="bN0" class="noar">Nulli</button>
+    </div>
+    <div class="row aronly">
+      <span>Pööra jooni 0,5°:</span>
+      <button id="bRotL">⟲</button><button id="bRotR">⟳</button>
     </div>
     <label class="chk noar"><input id="cDecl" type="checkbox"> Arvesta magnetilist deklinatsiooni (kompass → tõeline põhi)</label>
   </div>
@@ -398,25 +407,43 @@ function nearestVertex(e, n, skip) {   // lähim piiripunkt kõigi laaditud üks
   return best;
 }
 function arUndoPush() {
-  const a = S.ar; a.undo.push({ th: a.th, A: a.A.slice(), X: a.X.slice(), y0: a.y0, locks: a.locks, resid: a.resid, ground: a.ground });
+  const a = S.ar; a.undo.push({ th: a.th, A: a.A.slice(), X: a.X.slice(), B: a.B && a.B.slice(), y0: a.y0, locks: a.locks, resid: a.resid, ground: a.ground });
   if (a.undo.length > 30) a.undo.shift();
 }
-function arLock() {   // lähim piiripunkt hüppab sihikule; suund jääb samaks
-  const a = S.ar; if (!a || !a.aligned || !a.ret) return;
-  const g = xrToENU(a.ret[0], a.ret[2]), v = nearestVertex(g[0], g[1]); if (!v) return;
-  arUndoPush();
-  a.A = [v[0], v[1]]; a.X = [a.ret[0], a.ret[2]];
-  if (a.hitP) { a.y0 = a.ret[1] + S.cal.h; a.ground = 'tuvastatud'; }
-  a.locks = 1; a.resid = 0;
+function arMsg(t) { const a = S.ar; if (a) { a.msg = t; a.msgT = performance.now(); arUi(); } }
+// Üks nupp: 1. vajutus tõstab lähima piiripunkti sihikule (asukoht), 2. vajutus pöörab ümber selle punkti nii,
+// et lähim teine piiripunkt jääb sihiku suunale (suund), 3. vajutus avab luku uuesti (jooned jäävad paika).
+function arLockNext() {
+  const a = S.ar; if (!a || !a.aligned) return;
+  if (a.locks === 2) { arUndoPush(); a.locks = 0; a.B = null; a.resid = 0; return arMsg('Lukk avatud, jooned jäid paika'); }
+  if (!a.ret) return arMsg('Sihi rist maapinnale');
+  const g = xrToENU(a.ret[0], a.ret[2]);
+  if (a.locks === 0) {
+    const v = nearestVertex(g[0], g[1]); if (!v) return arMsg('25 m raadiuses pole piiripunkti');
+    arUndoPush();
+    a.A = [v[0], v[1]]; a.X = [a.ret[0], a.ret[2]];
+    if (a.hitP) { a.y0 = a.ret[1] + S.cal.h; a.ground = 'tuvastatud'; }
+    a.locks = 1; a.B = null; a.resid = 0; a.msg = '';
+  } else {
+    const v = nearestVertex(g[0], g[1], a.A); if (!v) return arMsg('25 m raadiuses pole teist piiripunkti');
+    const dx = a.ret[0] - a.X[0], dz = a.ret[2] - a.X[1], de = v[0] - a.A[0], dn = v[1] - a.A[1];
+    if (Math.hypot(dx, dz) < 2 || Math.hypot(de, dn) < 2) return arMsg('2. punkt peab olema 1. punktist vähemalt 2 m kaugusel');
+    arUndoPush();
+    a.th = Math.atan2(de, dn) - Math.atan2(dx, -dz);
+    a.B = [v[0], v[1]]; a.locks = 2; a.resid = Math.hypot(dx, dz) - Math.hypot(de, dn); a.msg = '';
+  }
+  arUi();
 }
-function arRotate() {   // pööra ümber lukustatud punkti nii, et lähim teine piiripunkt jääb sihiku suunale
-  const a = S.ar; if (!a || !a.aligned || !a.ret || !a.locks) return;
-  const g = xrToENU(a.ret[0], a.ret[2]), v = nearestVertex(g[0], g[1], a.A); if (!v) return;
-  const dx = a.ret[0] - a.X[0], dz = a.ret[2] - a.X[1], de = v[0] - a.A[0], dn = v[1] - a.A[1];
-  if (Math.hypot(dx, dz) < 2 || Math.hypot(de, dn) < 2) return;   // liiga lähedal, suund tuleks ebatäpne
-  arUndoPush();
-  a.th = Math.atan2(de, dn) - Math.atan2(dx, -dz);
-  a.locks = 2; a.resid = Math.hypot(dx, dz) - Math.hypot(de, dn);
+function arUi() {   // lukustusnupu tekst ja olekuriba
+  const a = S.ar; if (!a) return;
+  const bar = $('lockbar'), btn = $('bLock'), n = a.locks;
+  btn.textContent = n === 0 ? 'Lukusta 1. punkt' : n === 1 ? 'Lukusta 2. punkt' : 'Lukus. Alusta uuesti';
+  btn.className = 'aronly' + (n === 2 ? ' s2' : '');
+  const fresh = a.msg && performance.now() - a.msgT < 3500;
+  bar.textContent = fresh ? a.msg : !a.tracking ? 'Jälgimine kadunud, liiguta telefoni aeglaselt'
+    : n === 0 ? 'Lukus 0/2 · sihi rist 1. piirimärgile' : n === 1 ? 'Lukus 1/2 · sihi rist 2. piirimärgile'
+    : 'Lukus 2/2 · kauguste vahe ' + (a.resid >= 0 ? '+' : '−') + Math.abs(a.resid).toFixed(2).replace('.', ',') + ' m';
+  bar.className = 'aronly' + (n ? ' s' + n : '');
 }
 function arAlign(phi) {   // algjoondus: asukoht GPS-ist, suund kompassist
   const a = S.ar; if (!S.pos || !S.origin) return;
@@ -454,12 +481,12 @@ function xrFrame(t, fr) {
     if (tick || S.here === null) locate();
     draw(null, W, H); drawAim(W, H);
   }
-  if (tick) { S.hudT = t; drawHud(null); drawRadar(a.aligned ? { hdg: a.hdg } : null, W); }
+  if (tick) { S.hudT = t; arUi(); drawHud(null); drawRadar(a.aligned ? { hdg: a.hdg } : null, W); }
 }
 function drawAim(W, H) {   // sihik ekraani keskel ja joon piiripunktini, mille "Lukusta punkt" sinna tõstaks
   const a = S.ar, cx = W / 2, cy = H / 2;
-  if (a.ret && S.P) {
-    const g = xrToENU(a.ret[0], a.ret[2]), v = nearestVertex(g[0], g[1], a.locks ? a.A : null) || nearestVertex(g[0], g[1]);
+  if (a.ret && S.P && a.locks < 2) {
+    const g = xrToENU(a.ret[0], a.ret[2]), v = nearestVertex(g[0], g[1], a.locks ? a.A : null);
     if (v) {
       const [pe, pn] = userENU(), c = S.P.toCam(v[0] - pe, v[1] - pn, a.y0 - S.cal.h - a.cam.pos.y);
       if (c[2] > 0.3) {
@@ -468,7 +495,7 @@ function drawAim(W, H) {   // sihik ekraani keskel ja joon piiripunktini, mille 
         ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p[0], p[1]); ctx.stroke(); ctx.setLineDash([]);
       }
       ctx.font = '600 13px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const txt = (a.locks ? '2. punkt ' : 'lukustatav punkt ') + fmtM(v[2]), w = ctx.measureText(txt).width + 12;
+      const txt = (a.locks ? '2. punkt ' : '1. punkt ') + fmtM(v[2]), w = ctx.measureText(txt).width + 12;
       ctx.fillStyle = 'rgba(0,0,0,.72)'; ctx.fillRect(cx - w / 2, cy + 20, w, 22); ctx.fillStyle = '#fff'; ctx.fillText(txt, cx, cy + 31);
     }
   }
@@ -489,9 +516,10 @@ async function startAR() {
     let hit = null;
     try { hit = await session.requestHitTestSource({ space: await session.requestReferenceSpace('viewer') }); } catch (e) {}
     S.ar = { session, gl, ref, hit, aligned: false, th: 0, A: [0, 0], X: [0, 0], y0: 0, cam: null, phi: 0, hdg: 0, ret: null, hitP: null,
-             locks: 0, resid: 0, ground: 'eeldatud', tracking: false, undo: [], drag: null, moved: false };
+             locks: 0, B: null, msg: '', msgT: 0, resid: 0, ground: 'eeldatud', tracking: false, undo: [], drag: null, moved: false };
     S.arErr = ''; S.here = null;
     document.body.classList.add('ar'); $('nLbl').textContent = 'Nihuta jooni 10 cm:';
+    arUi();
     session.addEventListener('end', endAR);
     session.requestAnimationFrame(xrFrame);
   } catch (e) {
@@ -563,6 +591,17 @@ function draw(cam, W, H) {
   ctx.strokeStyle = '#ffe600'; ctx.lineWidth = 2.5; ctx.stroke(other);
   ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 3; ctx.stroke(mine);
   ctx.strokeStyle = '#ff5a36'; ctx.lineWidth = 2; ctx.stroke(posts);
+  if (ar && ar.locks) {   // lukustatud punktid ja nendevaheline sirge
+    const lk = new Path2D(), pts = ar.locks === 2 ? [ar.A, ar.B] : [ar.A];
+    const cs = pts.map(v => [P.toCam(v[0] - pe, v[1] - pn, ground), P.toCam(v[0] - pe, v[1] - pn, ground + 1)]);
+    for (const c of cs) {
+      seg(P, lk, c[0], c[1], W, H);
+      if (c[0][2] > 0.3) { const q = P.toPx(c[0]); lk.moveTo(q[0] + 10, q[1]); lk.arc(q[0], q[1], 10, 0, 2 * Math.PI); }
+    }
+    if (cs.length === 2) seg(P, lk, cs[0][0], cs[1][0], W, H);
+    ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.lineWidth = 8; ctx.stroke(lk);
+    ctx.strokeStyle = '#3ddc68'; ctx.lineWidth = 5; ctx.stroke(lk);
+  }
 
   ctx.font = '600 13px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const placed = [];
@@ -634,11 +673,11 @@ function drawHud(cam) {
   const L = [], add = (t, c) => L.push([t, c]), f = S.fix, sg = v => (v >= 0 ? '+' : '') + v.toFixed(1);
   const a = S.ar;
   if (a) {
-    add('AR-LUKK  ' + (a.tracking ? 'jälgimine OK' : 'jälgimine kadunud: liiguta telefoni aeglaselt'), a.tracking ? '' : 'e');
+    add('AR-lukk: ' + (a.tracking ? 'jälgimine OK' : 'jälgimine kadunud'), a.tracking ? '' : 'e');
     if (!a.aligned) add('Ootan asukohta ja kaamerat…', 'w');
-    else if (a.locks === 2) add('Joondus: 2 punkti, kauguste vahe ' + sg(a.resid) + ' m', Math.abs(a.resid) > 0.5 ? 'w' : '');
-    else if (a.locks === 1) add('Joondus: 1 punkt, suund kompassist', 'w');
-    else add('Joondus: GPS + kompass. Lukusta punkt!', 'w');
+    else if (a.locks === 2) { if (Math.abs(a.resid) > 0.5) add('Kauguste vahe on suur: kontrolli, kas lukustus õige punkt', 'w'); }
+    else if (a.locks === 1) add('Asukoht lukus, suund veel kompassist', 'w');
+    else add('Asukoht ja suund GPS-ist ja kompassist', 'w');
     add('Maapind: ' + (a.ground === 'tuvastatud' ? 'tuvastatud' : 'eeldatud, ' + S.cal.h.toFixed(1) + ' m kaamerast allpool'));
   }
   if (a) { if (f) add('GPS täpsus ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m (ei kasutata)'); }
@@ -739,11 +778,10 @@ $('bReload').addEventListener('click', () => { loadParcels(); });
 $('bN0').addEventListener('click', () => { if (!S.ar) S.nudge = [0, 0]; });
 $('bAR').addEventListener('click', startAR);
 $('bExit').addEventListener('click', () => { if (S.ar) S.ar.session.end(); });
-$('bLock').addEventListener('click', arLock);
-$('bRot').addEventListener('click', arRotate);
+$('bLock').addEventListener('click', arLockNext);
 $('bRotL').addEventListener('click', () => { const a = S.ar; if (a && a.aligned) { arUndoPush(); a.th += 0.5 * D2R; } });
 $('bRotR').addEventListener('click', () => { const a = S.ar; if (a && a.aligned) { arUndoPush(); a.th -= 0.5 * D2R; } });
-$('bUndo').addEventListener('click', () => { const a = S.ar, u = a && a.undo.pop(); if (u) Object.assign(a, u); });
+$('bUndo').addEventListener('click', () => { const a = S.ar, u = a && a.undo.pop(); if (u) { Object.assign(a, u); a.msg = ''; arUi(); } else if (a) arMsg('Pole midagi tagasi võtta'); });
 // AR-lukus saab jooni sõrmega mööda maad lohistada
 cv.addEventListener('pointerdown', e => { const a = S.ar; if (a && a.aligned) { a.drag = [e.clientX, e.clientY]; a.moved = false; } });
 cv.addEventListener('pointermove', e => {
