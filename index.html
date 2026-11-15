@@ -8,7 +8,7 @@
   Kaks režiimi, valik avalehel. Üks fail, build-sammu ega väliseid teeke pole.
   1) Piirimärgid: katastri piiripunktid telefoni kaamerapildil ja minikaardil.
   2) Huvipunktid: Maa- ja Ruumiameti huvipunktid (WFS huvipunkt:huvipunkt) sildina horisondil ja minikaardil; kihivalik salvestub (localStorage katasterAR.poi).
-     Minikaardil lühike vajutus vahetab ulatust, pikk vajutus avab kaardi täisekraanil.
+     Minikaardil lühike vajutus vahetab ulatust, pikk vajutus avab kaardi täisekraanil. Koordinaatide paneel näitab ka katastriüksust ja omandivormi.
   Andmed: Maa- ja Ruumiameti WFS, kihid kataster:ky_punktid_kehtiv (piiripunktid) ja kataster:ky_kehtiv (piirid), GeoJSON, L-EST97 (EPSG:3301).
   Sihtseade: Android + Chrome, HTTPS (nt GitHub Pages).
   AR-lukk (WebXR) on välja lülitatud: CFG.arLock = false. Kood on alles, aga nuppu ei näidata.
@@ -1031,7 +1031,7 @@ function drawHud(cam) {
     if (cam.byCourse) add('  Suund GPS-i liikumissuunast, kompassi nihe ' + sg(S.courseOff * R2D) + '°', 'w');
     if (!cam.abs) add('  Põhjasuund teadmata: joonte suund on vale', 'e');
   }
-  if (S.mode === 'poi') { add('Laaditud: ' + S.pois.length + ' huvipunkti, raadius ' + (S.poiR || POI.radius) / 1000 + ' km' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : '')); if (S.poiErr) add(S.poiErr, 'e'); }
+  if (S.mode === 'poi') { add('Laaditud: ' + S.pois.length + ' huvipunkti, raadius ' + (S.poiR || POI.radius) / 1000 + ' km' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : '')); if (S.poiErr) add(S.poiErr, 'e'); add('Katastriüksused: ' + OWN.feats.length + ', ±' + OWN.r + ' m' + (OWN.loading ? '  (laen…)' : ''), ''); if (OWN.err) add(OWN.err, 'w'); }
   else add('Laaditud: ' + S.pts.length + ' piiripunkti, ' + S.feats.length + ' üksust, ±' + (S.fetchR || CFG.radius) + ' m' + (S.loading ? '  (laen…)' : S.fetchCenter ? '  (' + S.fetchMs + ' ms)' : ''));
   if (S.truncated) add('Vastus kärbiti: kõiki objekte ei laaditud', 'w');
   if (S.ptErr) add(S.ptErr, 'e');
@@ -1054,12 +1054,14 @@ function drawHud(cam) {
       const u = userAbs();
       rows.push(['X ' + u[1].toFixed(1).replace('.', ',') + '  Y ' + u[0].toFixed(1).replace('.', ',') + '  ±' + (f.acc != null ? f.acc.toFixed(0) : '?') + ' m' + (!S.sim && fixAge() > 5000 ? '  näit ' + Math.round(fixAge() / 1000) + ' s vana' : ''), f.acc > 10 || (!S.sim && fixAge() > 5000) ? 'w' : '']);
       if (S.geoErr) rows.push([S.geoErr, 'w']);
-      if (S.mode === 'poi') { if (S.poiErr) rows.push([S.poiErr, 'e']); }
+      const poi = S.mode === 'poi';
+      if (poi && S.poiErr) rows.push([S.poiErr, 'e']);
+      if (poi && !OWN.ok) { if (OWN.err) rows.push([OWN.err, 'w']); }   // üksused pole veel laaditud
       else if (S.here && !S.hereGuess) {
         rows.push([S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), '']);
         rows.push([S.here.own || 'omandivorm teadmata', '', ownColor(S.here.own)]);
       } else if (S.here) rows.push(['Ei asu ühelgi üksusel. Lähim: ' + S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), 'w']);
-      else if (S.fetchCenter && !S.loading) rows.push(['Ei asu ühelgi üksusel', 'w']);
+      else if (poi ? !OWN.loading && !OWN.out : S.fetchCenter && !S.loading) rows.push(['Ei asu ühelgi üksusel', 'w']);
     } else rows.push([S.geoErr || 'GPS: ootan asukohta…', 'w']);
     for (const r of L) if (r[1] === 'e') rows.push(r);
   }
@@ -1084,7 +1086,7 @@ function frame(t) {
   const cam = camera();
   const tick = t - S.hudT > 250;
   if (S.mode === 'poi') {
-    if (tick) locatePoi();
+    if (tick) { locatePoi(); locateOwn(); }
     if (S.full) S.boxes = []; else if (cam && S.pos && S.origin) drawPoi(cam, W, H);
     if (tick) { S.hudT = t; ensureOrto(); drawHud(cam); if (S.full) drawMapFull(cam, W, H); else drawRadarPoi(cam, W); drawTargetPoi(); drawChips(); }
     return;
@@ -1384,6 +1386,41 @@ function setFull(v) {
 function nextRange() {
   PS.range = POI.ranges[(POI.ranges.indexOf(PS.range) + 1) % POI.ranges.length]; savePoi(); say('Ulatus ' + fmtD(PS.range)); S.hudT = -1e9;
   if (PS.range > (S.poiR || POI.radius)) loadPoi();
+}
+// Huvipunktide vaates näidatakse koordinaatide paneelil ka katastriüksust ja omandivormi, nagu piirimärkide vaates.
+// Selleks laetakse ainult lähiümbruse üksused (piiripunkte ei küsita); sõites laiemalt ja harvemini.
+const OWN = { feats: [], o: null, r: 0, loading: false, tryT: -1e9, err: '', ok: false, out: false };
+async function loadOwn() {
+  const u = userAbs(), fast = isFast(), r = fast ? 400 : 150;
+  if (OWN.loading || performance.now() - OWN.tryT < (OWN.err ? 10000 : fast ? 5000 : 2000)) return;
+  if (OWN.o && Math.hypot(u[0] - OWN.o.E, u[1] - OWN.o.N) < OWN.r - 50) return;   // laaditud ala servani on veel maad
+  OWN.loading = true; OWN.tryT = performance.now();
+  const o = { E: u[0], N: u[1] }, bbox = [o.E - r, o.N - r, o.E + r, o.N + r].map(v => v.toFixed(1)).join(',');
+  const url = CFG.wfs + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=' + CFG.layer + '&srsName=EPSG:3301&outputFormat=application/json&count=' + CFG.maxFeatures +
+    '&propertyName=' + CFG.props + '&bbox=' + bbox + ',EPSG:3301';
+  const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 15000);
+  try {
+    const x = await fetch(url, { signal: ac.signal }); if (!x.ok) throw new Error('HTTP ' + x.status);
+    const g = await x.json(); if (!g || !Array.isArray(g.features)) throw new Error('vastus ei ole GeoJSON');
+    OWN.feats = prepFeatures(g, o); OWN.o = o; OWN.r = r; OWN.err = ''; OWN.ok = true;
+  } catch (e) {
+    OWN.err = 'Katastriüksus: ' + (e.name === 'AbortError' ? 'WFS ei vastanud 15 sekundiga' : e.name === 'TypeError' ? 'päring ei läinud läbi' : (e.message || String(e)));
+  } finally { clearTimeout(timer); OWN.loading = false; }
+}
+function locateOwn() {
+  if (!S.pos || !S.origin) return;
+  loadOwn();
+  if (!OWN.o) { S.here = null; return; }
+  const u = userAbs(), e = u[0] - OWN.o.E, n = u[1] - OWN.o.N;
+  let here = null, guess = false;
+  OWN.out = Math.max(Math.abs(e), Math.abs(n)) >= OWN.r;   // laaditud alast väljas: oodatakse uut laadimist, mitte ei väideta, et üksust pole
+  for (const f of OWN.feats) if (inside(f, e, n)) { here = f; break; }
+  if (!here && !OWN.out) {   // tee, reformimata maa või GPS-i viga: lähima piiriga üksus
+    let best = Infinity;
+    for (const f of OWN.feats) { const d = boundaryDist(f, e, n)[0]; if (d < best) { best = d; here = f; } }
+    guess = !!here;
+  }
+  S.here = here; S.hereGuess = guess;
 }
 function drawTargetPoi() {
   const el = $('tgt'), p = S.tgtP;
