@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>Piirimärgid ja huvipunktid</title>
+<title>Huvipunktid ja piirimärgid</title>
 <!--
   Kaks režiimi, valik avalehel. Üks fail, build-sammu ega väliseid teeke pole.
   1) Piirimärgid: katastri piiripunktid telefoni kaamerapildil ja minikaardil.
@@ -70,7 +70,7 @@
   .poionly{display:none!important}
   .poi .poionly{display:revert!important}
   .poi .poionly[hidden]{display:none!important}
-  .poi label.poionly{display:block!important}
+  .poi label.poionly{display:block!important} .poi label.chk.poionly{display:flex!important}
   .layopen #tgt{display:none!important}
   .layopen #panel{background:rgba(8,9,11,.97)}
   .poi #radar{pointer-events:auto;touch-action:none;-webkit-touch-callout:none}
@@ -151,19 +151,20 @@
       <input id="rArr" type="range" min="5" max="50" step="5"></label>
     <label class="chk noar"><input id="cDecl" type="checkbox"> Arvesta magnetilist deklinatsiooni (kompass → tõeline põhi)</label>
     <label class="chk noar"><input id="cOrto" type="checkbox"> Ortofoto minikaardil</label>
+    <label class="chk poionly"><input id="cRoads" type="checkbox"> Teed ja rajad ortofotol</label>
     <label class="chk noar"><input id="cDbg" type="checkbox"> Näita silumisinfot</label>
     <div class="row"><button id="bCalClose">Sulge seaded</button></div>
   </div>
 </div>
 
 <div id="start">
-  <h1>Piirimärgid ja huvipunktid</h1>
+  <h1>Huvipunktid ja piirimärgid</h1>
   <p>Prototüüp. Vajab kaamera, asukoha ja liikumisandurite luba. Sinu asukoha ümbrus saadetakse päringuna
      Maa- ja Ruumiameti WFS- ja WMS-teenustele (katastriandmed, huvipunktid ja ortofoto).</p>
+  <button id="bStartPoi">Huvipunktid</button>
+  <p><small>Näitab ümbruse mõisaid, mälestisi, loodusobjekte, matkaradu ja muud kuni 20 km kauguselt. Kihte saab ise valida.</small></p>
   <button id="bStart">Piirimärgid</button>
   <p><small>Juhatab katastri piirimärgi lähedale. GPS-i ja kompassi viga on tavaliselt mitu meetrit, viimased meetrid tuleb märki otsida silmaga. See ei asenda piiri mõõdistamist.</small></p>
-  <button id="bStartPoi">Huvipunktid</button>
-  <p><small>Näitab ümbruse mõisaid, mälestisi, loodusobjekte, matkaradu ja muud kuni 10 km kauguselt. Kihte saab ise valida.</small></p>
 </div>
 
 <script>
@@ -191,6 +192,9 @@ const CFG = {
   orto: 'https://kaart.maaamet.ee/wms/fotokaart',   // ortofoto minikaardi alla, kiht EESTIFOTO, EPSG:3301
   ortoHalf: 200,      // m, ortofoto pildi poolkülg laadimiskoha ümber
   ortoPx: 512,
+  // Hübriidkaardi joonkihid ortofoto peale (huvipunktide vaates): teed, tänavad, rajad, raudteed. Nimesid, hooneid, veekogusid ja halduspiire ei ole.
+  // NB! Teenus ei tunne kihti HYB_tanavad_10T_01 siis, kui pildi külg on 256, 512 või 1024 px (kontrollitud); seepärast küsitakse joontega pilt 500 või 1000 px suurusena.
+  ortoLines: 'HYB_rajad,kergliiklustee,HYB_tanavad_10T_01,HYB_tanavad_jaotus_1,HYB_tanavad_pohi_1,HYB_mnt_muu,HYB_tee_muu,HYB_ramp_yhendus,HYB_korvalmnt,HYB_tugimnt,HYB_pohimnt,HYB_raudtee_esmane,HYB_roobasteed',
   refetchDist: 80,    // m, kui kaugele liikudes andmed uuesti küsitakse
   maxFeatures: 1000,
   maxDraw: 250,       // m, kaugemaid piirilõike ei joonistata
@@ -451,15 +455,22 @@ async function loadParcels() {
 }
 
 // Ortofoto minikaardi alla: üks WMS-pilt laadimiskoha ümber, L-EST97-s, seega kattub katastriga ilma teisendamata.
-function loadOrto(o, h, trails, px) {   // o = keskpunkt {E, N}, h = poolkülg meetrites; trails = kas laadida ka matkaradade joonte pilt
+// lines = kas lisada samasse pilti hübriidkaardi teed, rajad ja raudteed (server paneb kihid ise kokku, lisapäringut ei teki).
+function loadOrto(o, h, trails, px, lines) {   // o = keskpunkt {E, N}, h = poolkülg meetrites; trails = kas laadida ka matkaradade joonte pilt
   if (!S.cal.orto) { S.orto = null; return; }
   h = h || CFG.ortoHalf;
   px = px || CFG.ortoPx;
   const bbox = '&width=' + px + '&height=' + px + '&bbox=' + [o.E - h, o.N - h, o.E + h, o.N + h].map(v => v.toFixed(1)).join(',');
-  const rec = { im: new Image(), tr: null, E: o.E, N: o.N, h, px, ok: false };
+  const rec = { im: new Image(), tr: null, E: o.E, N: o.N, h, px, want: !!lines, lines: !!lines, tries: 0, ok: false };
   S.ortoReq = rec;
+  const url = () => CFG.orto + '?service=WMS&version=1.1.1&request=GetMap&layers=EESTIFOTO' + (rec.lines ? ',' + CFG.ortoLines : '') + '&styles=&srs=EPSG:3301&format=image/jpeg' + bbox + (rec.tries ? '&_r=' + rec.tries : '');
   rec.im.onload = () => { if (S.ortoReq === rec) { rec.ok = true; S.orto = rec; } };
-  rec.im.src = CFG.orto + '?service=WMS&version=1.1.1&request=GetMap&layers=EESTIFOTO&styles=&srs=EPSG:3301&format=image/jpeg' + bbox;
+  rec.im.onerror = () => {   // joontega päring ei õnnestunud: proovitakse ainult ortofotot; võrguvea korral kuni kolm kordust
+    if (S.ortoReq !== rec) return;
+    if (rec.lines) { rec.lines = false; rec.im.src = url(); return; }
+    if (rec.tries++ < 3) setTimeout(() => { if (S.ortoReq === rec) rec.im.src = url(); }, 4000);
+  };
+  rec.im.src = url();
   if (trails) {   // joonobjektide geomeetria on WFS-is raske, seepärast tulevad rajad minikaardile pildina
     const tr = new Image(); tr.onload = () => { rec.tr = tr; };
     tr.src = POI.wms + '?service=WMS&version=1.1.1&request=GetMap&layers=' + POI.trailLayers + '&styles=&srs=EPSG:3301&format=image/png&transparent=true' + bbox;
@@ -1214,9 +1225,9 @@ const POI = {
   draw(c, im, cx, cy, d) { const q = Math.min(24, im.naturalWidth, im.naturalHeight), k = d / 20.5; c.drawImage(im, 0, 0, q, q, cx - 10.2 * k, cy - 10.3 * k, q * k, q * k); }
 };
 // Kasutaja valikud jäävad telefoni meelde (localStorage): millised kategooriad on sees, kas näidata nimeta objekte, ulatus.
-const PS = { on: {}, unnamed: false, range: 2000, arrive: 10 };   // arrive = kohalejõudmise raadius meetrites
+const PS = { on: {}, unnamed: false, range: 2000, arrive: 10, roads: true };   // arrive = kohalejõudmise raadius meetrites
 for (const c of POI.cats) PS.on[c.id] = !!c.on;
-try { const v = JSON.parse(localStorage.getItem('katasterAR.poi') || '{}'); if (v.on) for (const c of POI.cats) if (typeof v.on[c.id] === 'boolean') PS.on[c.id] = v.on[c.id]; if (typeof v.unnamed === 'boolean') PS.unnamed = v.unnamed; if (POI.ranges.includes(v.range)) PS.range = v.range; if (v.arrive >= 5 && v.arrive <= 50) PS.arrive = +v.arrive; } catch (e) {}
+try { const v = JSON.parse(localStorage.getItem('katasterAR.poi') || '{}'); if (v.on) for (const c of POI.cats) if (typeof v.on[c.id] === 'boolean') PS.on[c.id] = v.on[c.id]; if (typeof v.unnamed === 'boolean') PS.unnamed = v.unnamed; if (POI.ranges.includes(v.range)) PS.range = v.range; if (v.arrive >= 5 && v.arrive <= 50) PS.arrive = +v.arrive; if (typeof v.roads === 'boolean') PS.roads = v.roads; } catch (e) {}
 function savePoi() { try { localStorage.setItem('katasterAR.poi', JSON.stringify(PS)); } catch (e) {} }
 const fmtD = d => d < 1000 ? Math.round(d / (d < 100 ? 1 : 10)) * (d < 100 ? 1 : 10) + ' m' : (d / 1000).toFixed(d < 10000 ? 1 : 0).replace('.', ',') + ' km';
 const catOf = p => POI.cats.find(c => c.k.includes(p.kiht) && (!c.m || c.m(p)));
@@ -1335,9 +1346,9 @@ function ensureOrto() {   // ortofoto järgib kasutajat ja valitud ulatust
   if (!S.pos || !S.origin) return;
   // täisvaates on pilt kõrgem kui lai, seega peab ortofoto katma suurema ala ja olema tihedam
   const u = userAbs(), h = Math.round(PS.range * (S.full ? Math.max(1.4, 1.15 * innerHeight / innerWidth) : 1.4)), cur = S.ortoReq;
-  const px = S.full ? 1024 : CFG.ortoPx;
-  if (cur && cur.h === h && cur.px === px && Math.hypot(u[0] - cur.E, u[1] - cur.N) < PS.range * 0.3) return;
-  loadOrto({ E: u[0], N: u[1] }, h, PS.on.matkarada || PS.on.ratas, px);
+  const px = PS.roads ? (S.full ? 1000 : 500) : (S.full ? 1024 : CFG.ortoPx);
+  if (cur && cur.h === h && cur.px === px && cur.want === PS.roads && Math.hypot(u[0] - cur.E, u[1] - cur.N) < PS.range * 0.3) return;
+  loadOrto({ E: u[0], N: u[1] }, h, PS.on.matkarada || PS.on.ratas, px, PS.roads);
 }
 function drawRadarPoi(cam, W) {
   const s = 130, dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1693,6 +1704,7 @@ bindRange('rFov', 'oFov', 'fov', v => v.toFixed(0) + '°');
 bindRange('rH', 'oH', 'h', v => v.toFixed(1) + ' m');
 if (!(S.cal.avgN >= 3 && S.cal.avgN <= 30)) S.cal.avgN = 10;
 bindRange('rAvgN', 'oAvgN', 'avgN', v => String(v));
+$('cRoads').checked = PS.roads; $('cRoads').addEventListener('change', () => { PS.roads = $('cRoads').checked; savePoi(); S.hudT = -1e9; });
 { const r = $('rArr'), o = $('oArr'), show = () => { o.textContent = PS.arrive + ' m'; }; r.value = PS.arrive; show();
   r.addEventListener('input', () => { PS.arrive = +r.value; show(); savePoi(); S.hudT = -1e9; }); }
 $('cOrto').checked = !!S.cal.orto;
