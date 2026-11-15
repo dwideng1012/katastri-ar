@@ -77,6 +77,9 @@
   #tLinks{margin:4px 0 2px;display:flex;flex-wrap:nowrap;gap:6px;align-items:center;color:#c9ccd1;font-size:14px}
   .poi #tLinks{display:flex!important} .poi #tLinks[hidden]{display:none!important}
   #tLinks a{padding:5px 9px;border:1px solid #777;border-radius:8px;background:#22262c;color:#fff;font-size:14px;text-decoration:none;white-space:nowrap}
+  /* huvipunktide vaates on tekst kokku pakitud: pealkiri kuni 2 rida, tüüp, aadress ja märkus igaüks 1 rida; vajutus tekstil avab kogu teksti */
+  .poi #tgt:not(.open) #tMain{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+  .poi #tgt:not(.open) #tInfo, .poi #tgt:not(.open) #tUnits, .poi #tgt:not(.open) #tXY{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* huvipunktide vaates on alumised nupud ühes reas võrdse laiusega */
   .poi #panel > .row{flex-wrap:nowrap}
   .poi #panel > .row > button{flex:1 1 0;min-width:0;min-height:36px;padding:0 4px;white-space:nowrap}
@@ -1467,9 +1470,11 @@ function locateOwn() {
   }
   S.here = here; S.hereGuess = guess;
 }
+$('tgt').addEventListener('click', e => { if (S.mode === 'poi' && !e.target.closest('a')) $('tgt').classList.toggle('open'); });   // tekst lahti ja kokku
 function drawTargetPoi() {
   const el = $('tgt'), A = S.pos && S.origin ? S.arrP : null, p = A || S.tgtP;
   el.classList.toggle('arr', !!A);
+  const key = p ? (A ? 'a' : 't') + p.id : ''; if (S.tgtKey !== key) { S.tgtKey = key; el.classList.remove('open'); }   // uus objekt: tekst jälle lühike
   if (A) {   // kohal: noole ja kauguse asemel teade, raamil ikooni värv; teekonna nupud peidus, veebileht jääb
     const c = POI.color(A.ic, null), hex = c ? 'rgb(' + c.join(',') + ')' : POI.colors[A.cat.g];
     el.hidden = false; el.style.setProperty('--arr', hex); el.style.setProperty('--arrbg', c ? 'rgba(' + c.join(',') + ',.24)' : 'rgba(255,255,255,.1)');
