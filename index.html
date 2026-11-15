@@ -74,9 +74,12 @@
   /* täisekraanil kaart: pikk vajutus minikaardil avab ja sulgeb */
   .mapfull #radar{left:0;top:0;right:auto;width:100%;height:100%;border-radius:0}
   .mapfull #hud{z-index:2} .mapfull #chips{top:52px} .mapfull #panel{background:rgba(8,9,11,.9)}
-  #tLinks{margin:4px 0 2px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;color:#c9ccd1}
+  #tLinks{margin:4px 0 2px;display:flex;flex-wrap:nowrap;gap:6px;align-items:center;color:#c9ccd1;font-size:14px}
   .poi #tLinks{display:flex!important} .poi #tLinks[hidden]{display:none!important}
-  #tLinks a{padding:6px 12px;border:1px solid #777;border-radius:8px;background:#22262c;color:#fff;font-size:14px;text-decoration:none}
+  #tLinks a{padding:5px 9px;border:1px solid #777;border-radius:8px;background:#22262c;color:#fff;font-size:14px;text-decoration:none;white-space:nowrap}
+  /* huvipunktide vaates on alumised nupud ühes reas võrdse laiusega */
+  .poi #panel > .row{flex-wrap:nowrap}
+  .poi #panel > .row > button{flex:1 1 0;min-width:0;min-height:36px;padding:0 4px;white-space:nowrap}
   #lay{max-height:62vh;overflow-y:auto;margin-top:4px}
   #lay h3{margin:10px 0 2px;font-size:14px;color:#ffd24a}
   #lay label.chk{margin:5px 0}
