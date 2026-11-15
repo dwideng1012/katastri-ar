@@ -440,7 +440,7 @@ function loadOrto(o, h, trails, px) {   // o = keskpunkt {E, N}, h = poolkülg m
   h = h || CFG.ortoHalf;
   px = px || CFG.ortoPx;
   const bbox = '&width=' + px + '&height=' + px + '&bbox=' + [o.E - h, o.N - h, o.E + h, o.N + h].map(v => v.toFixed(1)).join(',');
-  const rec = { im: new Image(), tr: null, E: o.E, N: o.N, h, ok: false };
+  const rec = { im: new Image(), tr: null, E: o.E, N: o.N, h, px, ok: false };
   S.ortoReq = rec;
   rec.im.onload = () => { if (S.ortoReq === rec) { rec.ok = true; S.orto = rec; } };
   rec.im.src = CFG.orto + '?service=WMS&version=1.1.1&request=GetMap&layers=EESTIFOTO&styles=&srs=EPSG:3301&format=image/jpeg' + bbox;
@@ -1279,8 +1279,9 @@ function ensureOrto() {   // ortofoto järgib kasutajat ja valitud ulatust
   if (!S.pos || !S.origin) return;
   // täisvaates on pilt kõrgem kui lai, seega peab ortofoto katma suurema ala ja olema tihedam
   const u = userAbs(), h = Math.round(PS.range * (S.full ? Math.max(1.4, 1.15 * innerHeight / innerWidth) : 1.4)), cur = S.ortoReq;
-  if (cur && cur.h === h && Math.hypot(u[0] - cur.E, u[1] - cur.N) < PS.range * 0.3) return;
-  loadOrto({ E: u[0], N: u[1] }, h, PS.on.matkarada || PS.on.ratas, S.full ? 1024 : 0);
+  const px = S.full ? 1024 : CFG.ortoPx;
+  if (cur && cur.h === h && cur.px === px && Math.hypot(u[0] - cur.E, u[1] - cur.N) < PS.range * 0.3) return;
+  loadOrto({ E: u[0], N: u[1] }, h, PS.on.matkarada || PS.on.ratas, px);
 }
 function drawRadarPoi(cam, W) {
   const s = 130, dpr = Math.min(window.devicePixelRatio || 1, 2);
