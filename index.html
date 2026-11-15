@@ -8,6 +8,7 @@
   Kaks režiimi, valik avalehel. Üks fail, build-sammu ega väliseid teeke pole.
   1) Piirimärgid: katastri piiripunktid telefoni kaamerapildil ja minikaardil.
   2) Huvipunktid: Maa- ja Ruumiameti huvipunktid (WFS huvipunkt:huvipunkt) sildina horisondil ja minikaardil; kihivalik salvestub (localStorage katasterAR.poi).
+     Minikaardil lühike vajutus vahetab ulatust, pikk vajutus avab kaardi täisekraanil.
   Andmed: Maa- ja Ruumiameti WFS, kihid kataster:ky_punktid_kehtiv (piiripunktid) ja kataster:ky_kehtiv (piirid), GeoJSON, L-EST97 (EPSG:3301).
   Sihtseade: Android + Chrome, HTTPS (nt GitHub Pages).
   AR-lukk (WebXR) on välja lülitatud: CFG.arLock = false. Kood on alles, aga nuppu ei näidata.
@@ -65,7 +66,10 @@
   .poi .poionly[hidden]{display:none!important}
   .layopen #tgt{display:none!important}
   .layopen #panel{background:rgba(8,9,11,.97)}
-  .poi #radar{pointer-events:auto}
+  .poi #radar{pointer-events:auto;touch-action:none;-webkit-touch-callout:none}
+  /* täisekraanil kaart: pikk vajutus minikaardil avab ja sulgeb */
+  .mapfull #radar{left:0;top:0;right:auto;width:100%;height:100%;border-radius:0}
+  .mapfull #hud{z-index:2} .mapfull #chips{top:52px} .mapfull #panel{background:rgba(8,9,11,.9)}
   #tLinks{margin:4px 0 2px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;color:#c9ccd1}
   .poi #tLinks{display:flex!important} .poi #tLinks[hidden]{display:none!important}
   #tLinks a{padding:6px 12px;border:1px solid #777;border-radius:8px;background:#22262c;color:#fff;font-size:14px;text-decoration:none}
@@ -431,10 +435,11 @@ async function loadParcels() {
 }
 
 // Ortofoto minikaardi alla: üks WMS-pilt laadimiskoha ümber, L-EST97-s, seega kattub katastriga ilma teisendamata.
-function loadOrto(o, h, trails) {   // o = keskpunkt {E, N}, h = poolkülg meetrites; trails = kas laadida ka matkaradade joonte pilt
+function loadOrto(o, h, trails, px) {   // o = keskpunkt {E, N}, h = poolkülg meetrites; trails = kas laadida ka matkaradade joonte pilt
   if (!S.cal.orto) { S.orto = null; return; }
   h = h || CFG.ortoHalf;
-  const bbox = '&width=' + CFG.ortoPx + '&height=' + CFG.ortoPx + '&bbox=' + [o.E - h, o.N - h, o.E + h, o.N + h].map(v => v.toFixed(1)).join(',');
+  px = px || CFG.ortoPx;
+  const bbox = '&width=' + px + '&height=' + px + '&bbox=' + [o.E - h, o.N - h, o.E + h, o.N + h].map(v => v.toFixed(1)).join(',');
   const rec = { im: new Image(), tr: null, E: o.E, N: o.N, h, ok: false };
   S.ortoReq = rec;
   rec.im.onload = () => { if (S.ortoReq === rec) { rec.ok = true; S.orto = rec; } };
@@ -1080,8 +1085,8 @@ function frame(t) {
   const tick = t - S.hudT > 250;
   if (S.mode === 'poi') {
     if (tick) locatePoi();
-    if (cam && S.pos && S.origin) drawPoi(cam, W, H);
-    if (tick) { S.hudT = t; ensureOrto(); drawHud(cam); drawRadarPoi(cam, W); drawTargetPoi(); drawChips(); }
+    if (S.full) S.boxes = []; else if (cam && S.pos && S.origin) drawPoi(cam, W, H);
+    if (tick) { S.hudT = t; ensureOrto(); drawHud(cam); if (S.full) drawMapFull(cam, W, H); else drawRadarPoi(cam, W); drawTargetPoi(); drawChips(); }
     return;
   }
   if (tick || S.here === null) locate();
@@ -1272,9 +1277,10 @@ function drawPoi(cam, W, H) {
 function ensureOrto() {   // ortofoto järgib kasutajat ja valitud ulatust
   if (!S.cal.orto) { S.orto = null; return; }
   if (!S.pos || !S.origin) return;
-  const u = userAbs(), h = PS.range * 1.4, cur = S.ortoReq;
+  // täisvaates on pilt kõrgem kui lai, seega peab ortofoto katma suurema ala ja olema tihedam
+  const u = userAbs(), h = Math.round(PS.range * (S.full ? Math.max(1.4, 1.15 * innerHeight / innerWidth) : 1.4)), cur = S.ortoReq;
   if (cur && cur.h === h && Math.hypot(u[0] - cur.E, u[1] - cur.N) < PS.range * 0.3) return;
-  loadOrto({ E: u[0], N: u[1] }, h, PS.on.matkarada || PS.on.ratas);
+  loadOrto({ E: u[0], N: u[1] }, h, PS.on.matkarada || PS.on.ratas, S.full ? 1024 : 0);
 }
 function drawRadarPoi(cam, W) {
   const s = 130, dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1311,6 +1317,72 @@ function drawRadarPoi(cam, W) {
   // ulatus ringi all servas; minikaardile vajutus vahetab seda
   const lbl = fmtD(PS.range); rctx.font = '600 11px sans-serif'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle';
   const lw = rctx.measureText(lbl).width + 10; rctx.fillStyle = 'rgba(0,0,0,.75)'; rctx.fillRect(s / 2 - lw / 2, s - 19, lw, 15); rctx.fillStyle = '#fff'; rctx.fillText(lbl, s / 2, s - 11);
+}
+// Täisekraanil kaart: põhi üleval (ei pöörle, et objektile oleks lihtne vajutada), keskel kasutaja, vaatesuund sektorina.
+// Katkendlik ring näitab valitud ulatust; näha on kõik laaditud objektid, mis ekraanile mahuvad. Vajutus objektil valib selle.
+function drawMapFull(cam, W, H) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), pw = Math.round(W * dpr), phh = Math.round(H * dpr);
+  if (radar.width !== pw || radar.height !== phh) { radar.width = pw; radar.height = phh; }
+  rctx.setTransform(dpr, 0, 0, dpr, 0, 0); rctx.fillStyle = '#16181c'; rctx.fillRect(0, 0, W, H);
+  S.mapHits = []; S.mapBtn = null;
+  const bottom = Math.max(200, $('panel').getBoundingClientRect().top), cx = W / 2, cy = bottom / 2;
+  // nupud üleval paremal: ulatus (vajutus vahetab) ja sulgemine
+  const btn = (txt, right) => { rctx.font = '600 14px system-ui,sans-serif'; const w = Math.max(36, rctx.measureText(txt).width + 20), x = right - w, y = 8; rctx.fillStyle = 'rgba(0,0,0,.78)'; rctx.beginPath(); rctx.roundRect ? rctx.roundRect(x, y, w, 36, 8) : rctx.rect(x, y, w, 36); rctx.fill(); rctx.strokeStyle = '#777'; rctx.lineWidth = 1; rctx.stroke(); rctx.fillStyle = '#fff'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle'; rctx.fillText(txt, x + w / 2, y + 19); return [x, y, w, 36]; };
+  const buttons = () => { const c = btn('✕', W - 8), r = btn(fmtD(PS.range), c[0] - 6); S.mapBtn = { close: c, range: r }; };
+  if (!S.pos || !S.origin) { buttons(); return; }
+  S.fpx = focalPx(W, H);
+  const [pe, pn] = userENU(), k = (W / 2 - 10) / PS.range, hdg = cam ? cam.hdg : 0, ph = S.cal.orto && S.orto && S.orto.ok ? S.orto : null;
+  rctx.save(); rctx.translate(cx, cy);
+  if (ph) {
+    const ox = ph.E - S.origin.E, oy = ph.N - S.origin.N, x = (ox - ph.h - pe) * k, y = -(oy + ph.h - pn) * k, d = 2 * ph.h * k;
+    rctx.drawImage(ph.im, x, y, d, d); if (ph.tr) rctx.drawImage(ph.tr, x, y, d, d);
+    rctx.fillStyle = 'rgba(0,0,0,.18)'; rctx.fillRect(-cx, -cy, W, H);   // veidi tumedamaks, et märgid ja nimed paistaksid
+  }
+  rctx.setLineDash([6, 6]); rctx.strokeStyle = 'rgba(255,255,255,.75)'; rctx.lineWidth = 1.5; rctx.beginPath(); rctx.arc(0, 0, PS.range * k, 0, 7); rctx.stroke(); rctx.setLineDash([]);
+  // vaatesuund sektorina (objektide alla)
+  const half = Math.atan((W / 2) / S.fpx), L = 70;
+  rctx.save(); rctx.rotate(hdg);
+  rctx.fillStyle = 'rgba(0,229,255,.22)'; rctx.beginPath(); rctx.moveTo(0, 0); rctx.arc(0, 0, L, -Math.PI / 2 - half, -Math.PI / 2 + half); rctx.closePath(); rctx.fill();
+  rctx.strokeStyle = 'rgba(255,255,255,.85)'; rctx.lineWidth = 1; rctx.beginPath(); rctx.moveTo(-Math.sin(half) * L, -Math.cos(half) * L); rctx.lineTo(0, 0); rctx.lineTo(Math.sin(half) * L, -Math.cos(half) * L); rctx.stroke();
+  rctx.restore();
+  const T = S.tgtP, vis = [];
+  for (const p of S.pois) {
+    if (p.d == null) continue;
+    const x = (p.e - pe) * k, y = -(p.n - pn) * k;
+    if (x < -cx - 14 || x > cx + 14 || y < -cy - 14 || y > H - cy + 14) continue;
+    vis.push({ p, x, y });
+  }
+  vis.sort((a, b) => (a.p === T) - (b.p === T) || b.p.d - a.p.d);   // lähemad ja valitud objekt joonistatakse viimasena ehk peale
+  if (T) { rctx.strokeStyle = 'rgba(0,0,0,.6)'; rctx.lineWidth = 4; rctx.beginPath(); rctx.moveTo(0, 0); rctx.lineTo((T.e - pe) * k, -(T.n - pn) * k); rctx.stroke(); rctx.strokeStyle = '#ffd24a'; rctx.lineWidth = 2; rctx.stroke(); }
+  const ID = 20;
+  for (const v of vis) {
+    const ic = POI.icon(v.p.ic);
+    if (ic) POI.draw(rctx, ic, v.x, v.y, ID);
+    else { rctx.beginPath(); rctx.arc(v.x, v.y, 6, 0, 7); rctx.fillStyle = POI.colors[v.p.cat.g]; rctx.fill(); rctx.strokeStyle = 'rgba(0,0,0,.85)'; rctx.lineWidth = 1; rctx.stroke(); }
+    if (v.p === T) { rctx.beginPath(); rctx.arc(v.x, v.y, ID / 2 + 3, 0, 7); rctx.strokeStyle = 'rgba(0,0,0,.7)'; rctx.lineWidth = 5; rctx.stroke(); rctx.strokeStyle = '#ffd24a'; rctx.lineWidth = 2.5; rctx.stroke(); }
+    S.mapHits.push([v.x + cx, v.y + cy, v.p.id]);
+  }
+  // nimed: valitud objekt alati, teised lähemast alates seni, kuni need üksteist ei kata
+  rctx.font = '600 12px system-ui,sans-serif'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle'; rctx.lineJoin = 'round';
+  const placed = [];
+  for (const v of vis.slice().reverse()) {
+    if (placed.length >= 14 && v.p !== T) continue;
+    const name = v.p.name.length > 24 ? v.p.name.slice(0, 23) + '…' : v.p.name, w = rctx.measureText(name).width + 6, x = v.x - w / 2, y = v.y + ID / 2 + 3;
+    if (v.p !== T && placed.some(r => x < r[0] + r[2] && x + w > r[0] && y < r[1] + 16 && y + 16 > r[1])) continue;
+    placed.push([x, y, w]);
+    rctx.strokeStyle = 'rgba(0,0,0,.9)'; rctx.lineWidth = 4; rctx.strokeText(name, v.x, y + 8); rctx.fillStyle = v.p === T ? '#ffd24a' : '#fff'; rctx.fillText(name, v.x, y + 8);
+  }
+  rctx.fillStyle = '#00e5ff'; rctx.beginPath(); rctx.arc(0, 0, 6, 0, 7); rctx.fill(); rctx.strokeStyle = '#fff'; rctx.lineWidth = 2; rctx.stroke();
+  rctx.restore();
+  buttons();
+}
+function setFull(v) {
+  S.full = !!v; document.body.classList.toggle('mapfull', S.full); S.hudT = -1e9;
+  if (S.full) say('Kaart: vajuta objektile. Pikk vajutus või ✕ sulgeb.');
+}
+function nextRange() {
+  PS.range = POI.ranges[(POI.ranges.indexOf(PS.range) + 1) % POI.ranges.length]; savePoi(); say('Ulatus ' + fmtD(PS.range)); S.hudT = -1e9;
+  if (PS.range > (S.poiR || POI.radius)) loadPoi();
 }
 function drawTargetPoi() {
   const el = $('tgt'), p = S.tgtP;
@@ -1361,10 +1433,26 @@ function buildLayers() {
   row.append(b, b2); el.append(row); el.scrollTop = keep;
 }
 $('bLay').addEventListener('click', () => { const el = $('lay'); if (el.hidden) { $('cal').hidden = true; buildLayers(); el.hidden = false; } else el.hidden = true; document.body.classList.toggle('layopen', !el.hidden); });
-radar.addEventListener('click', () => {   // huvipunktide vaates vahetab vajutus minikaardil ulatust
+// Minikaart huvipunktide vaates: lühike vajutus vahetab ulatust, pikk vajutus avab kaardi täisekraanil (ja sulgeb selle).
+const LP = { t: 0, fired: false, x: 0, y: 0 };
+radar.addEventListener('pointerdown', e => {
   if (S.mode !== 'poi') return;
-  PS.range = POI.ranges[(POI.ranges.indexOf(PS.range) + 1) % POI.ranges.length]; savePoi(); say('Ulatus ' + fmtD(PS.range)); S.hudT = -1e9;
-  if (PS.range > (S.poiR || POI.radius)) loadPoi();
+  LP.fired = false; LP.x = e.clientX; LP.y = e.clientY; clearTimeout(LP.t);
+  LP.t = setTimeout(() => { LP.fired = true; setFull(!S.full); if (navigator.vibrate) try { navigator.vibrate(25); } catch (err) {} }, 550);
+});
+radar.addEventListener('pointermove', e => { if (Math.hypot(e.clientX - LP.x, e.clientY - LP.y) > 12) clearTimeout(LP.t); });
+for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) radar.addEventListener(ev, () => clearTimeout(LP.t));
+radar.addEventListener('contextmenu', e => e.preventDefault());
+radar.addEventListener('click', e => {
+  if (S.mode !== 'poi') return;
+  if (LP.fired) { LP.fired = false; return; }   // see vajutus oli pikk ja on juba käsitletud
+  if (!S.full) return nextRange();
+  const inR = r => r && e.clientX >= r[0] - 4 && e.clientX <= r[0] + r[2] + 4 && e.clientY >= r[1] - 4 && e.clientY <= r[1] + r[3] + 4;
+  if (S.mapBtn && inR(S.mapBtn.close)) return setFull(false);
+  if (S.mapBtn && inR(S.mapBtn.range)) return nextRange();
+  let best = null, bd = 28;   // lähim objekt 28 px raadiuses
+  for (const h of S.mapHits || []) { const d = Math.hypot(h[0] - e.clientX, h[1] - e.clientY); if (d < bd) { bd = d; best = h[2]; } }
+  if (best != null) { S.tgt = best; locatePoi(); drawTargetPoi(); S.hudT = -1e9; }
 });
 
 /* ---------- käivitamine ja juhtnupud ---------- */
