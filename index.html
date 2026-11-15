@@ -9,7 +9,7 @@
   1) Piirimärgid: katastri piiripunktid telefoni kaamerapildil ja minikaardil.
   2) Huvipunktid: Maa- ja Ruumiameti huvipunktid (WFS huvipunkt:huvipunkt) sildina horisondil ja minikaardil; kihivalik salvestub (localStorage katasterAR.poi).
      Minikaardil lühike vajutus vahetab ulatust, pikk vajutus avab kaardi täisekraanil. Koordinaatide paneel näitab ka katastriüksust ja omandivormi.
-     Kohale jõudes (vaikimisi 10 m, välja 20 m juures) kaob ikoon kaamerapildist ja infopaneel saab ikooni värvi raami.
+     Kohale jõudes (vaikimisi 10 m, välja 5 m kaugemal) kaob ikoon kaamerapildist ja infopaneel saab ikooni värvi raami.
   Andmed: Maa- ja Ruumiameti WFS, kihid kataster:ky_punktid_kehtiv (piiripunktid) ja kataster:ky_kehtiv (piirid), GeoJSON, L-EST97 (EPSG:3301).
   Sihtseade: Android + Chrome, HTTPS (nt GitHub Pages).
   AR-lukk (WebXR) on välja lülitatud: CFG.arLock = false. Kood on alles, aga nuppu ei näidata.
@@ -1257,8 +1257,8 @@ async function loadPoi() {
 function locatePoi() {
   if (!S.pos || !S.origin) return;
   const [pe, pn] = userENU(); let near = null, nd = Infinity, tgt = null;
-  // Kohalolek: sisse raadiuse juures, välja alles kahekordse raadiuse juures (GPS kõigub, muidu hakkaks piiril vilkuma). Sõites ei käivitu.
-  const rIn = PS.arrive, rOut = 2 * rIn, fast = isFast(), was = S.arr || [], here = [];
+  // Kohalolek: sisse raadiuse juures, välja alles 5 m kaugemal (GPS kõigub, muidu hakkaks piiril vilkuma). Sõites ei käivitu.
+  const rIn = PS.arrive, rOut = rIn + 5, fast = isFast(), was = S.arr || [], here = [];
   for (const p of S.pois) {
     p.d = Math.hypot(p.e - pe, p.n - pn);
     if (p.d < nd) { nd = p.d; near = p; }
