@@ -1308,33 +1308,65 @@ function drawPoi(cam, W, H) {
   const [pe, pn] = userENU(); S.fpx = focalPx(W, H);
   const P = S.P = mkProj(cam.R, W, H, S.fpx, screenAngle()), T = S.tgtP, vis = [];
   S.boxes = [];
+  // Tihedas kohas (linn) ei tohi sildid vilkuda. Selleks on valik ja paigutus püsivad (S.lab: objekti id -> rida ja pildile tuleku aeg):
+  //  - serva ja ulatuse puhver: objekt tuleb pilti 20 px seestpoolt ja kaob alles 40 px väljaspool; ulatuse piiril samuti väike varu;
+  //  - sildi saanud objekt hoiab seda, kuni mõni teine on kõige kaugemast näidatavast selgelt lähemal (20% või 10 m) ja too on olnud pildis vähemalt 2 s;
+  //  - objekt jääb oma reale; rida vahetub ainult siis, kui see läheb kinni, ja allapoole laskutakse alles 24 px vahe korral.
+  const now = performance.now(), LAB = S.lab || (S.lab = new Map());
   for (const p of S.pois) {
-    if (p.d == null || p.here || (p.d > PS.range && p !== T)) continue;   // kohal olles ikooni ei näidata: nii lähedal on suund juhuslik
+    const had = LAB.has(p.id);
+    if (p.d == null || p.here || (p !== T && p.d > PS.range + (had ? Math.max(10, PS.range * 0.04) : 0))) continue;   // kohal olles ikooni ei näidata: nii lähedal on suund juhuslik
     const c = P.toCam(p.e - pe, p.n - pn, 0); if (c[2] < 0.5) continue;
-    const q = P.toPx(c); if (q[0] < -30 || q[0] > W + 30) continue;
+    const q = P.toPx(c), m = had ? -40 : 20; if (q[0] < m || q[0] > W - m) continue;
     vis.push({ p, q });
   }
   vis.sort((a, b) => (b.p === T) - (a.p === T) || a.p.d - b.p.d);
+  const cand = new Map(vis.map(v => [v.p.id, v])), NL = POI.maxLabels + 1;
+  for (const id of [...LAB.keys()]) if (!cand.has(id)) LAB.delete(id);
+  for (const v of vis) {
+    if (LAB.has(v.p.id)) continue;
+    if (LAB.size < NL) { LAB.set(v.p.id, { row: -1, t: now }); continue; }
+    let far = null, fd = -1;
+    for (const id of LAB.keys()) { const u = cand.get(id).p; if (u !== T && u.d > fd) { fd = u.d; far = id; } }
+    if (far != null && (v.p === T || (v.p.d < fd - Math.max(10, 0.2 * fd) && now - LAB.get(far).t > 2000))) { LAB.delete(far); LAB.set(v.p.id, { row: -1, t: now }); }
+    else if (v.p !== T) break;   // järgmised on veel kaugemal
+  }
+  const shown = [...LAB.entries()].map(([id, st]) => ({ v: cand.get(id), st })).sort((a, b) => a.st.t - b.st.t);   // vanemad enne: nemad hoiavad oma rea
   ctx.font = '600 14px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   const placed = [], items = [], top = 64, base = H * 0.62, IC = 30, TH = 18, UH = TH + 2 + IC;   // üksus = nimi (TH) ja selle all ikoon (IC)
   let keep = null;   // minikaardi ja selle all olevate olekumärkide ala: [vasak serv, alumine serv]
   for (const id of ['radar', 'avg', 'calchip']) { const e = $(id); if (!e || e.hidden) continue; const b = e.getBoundingClientRect(); if (!b.width) continue; keep = keep ? [Math.min(keep[0], b.left - 6), Math.max(keep[1], b.bottom + 6)] : [b.left - 6, b.bottom + 6]; }
-  for (const v of vis.slice(0, POI.maxLabels + 1)) {   // 1. samm: kohad. Ikooni keskpunkt on horisondil objekti suunas; kui koht on kinni, nihkub üksus ülespoole.
+  // 1. samm: kohad. Ikooni keskpunkt on horisondil objekti suunas; kui koht on kinni, on üksus kõrgemal real.
+  const step = UH + 6, G = shown.map(({ v, st }) => {
     const p = v.p, name = p.name.length > 28 ? p.name.slice(0, 27) + '…' : p.name, txt = name + ' · ' + fmtD(p.d);
     const w = Math.max(IC, ctx.measureText(txt).width + 8), hy = Math.max(top + 60, Math.min(base, v.q[1]));   // horisont võib olla kaadrist väljas: silt jääb ikka nähtavale
-    const x0 = Math.max(4, Math.min(W - w - 4, v.q[0] - w / 2)); let y = hy - TH - 2 - IC / 2, tries = 0;
-    const xAt = yy => keep && yy < keep[1] && x0 + w > keep[0] ? keep[0] - w : x0;   // minikaardi kõrgusel nihkub silt sellest vasakule
-    const hit = yy => { const xx = xAt(yy); return placed.some(r => xx < r[0] + r[2] + 6 && xx + w + 6 > r[0] && yy < r[1] + r[3] + 4 && yy + UH + 4 > r[1]); };
-    while (tries < 12 && hit(y)) { y -= UH + 6; tries++; }
-    let x = xAt(y), tx = txt, tw = w;
-    if (y < top) continue;
-    if (x < 4) {   // ei mahu minikaardist vasakule: nimi lühemaks
-      x = 4; const room = keep[0] - 8, tail = ' · ' + fmtD(p.d); let nm = name;
+    const x0 = Math.max(4, Math.min(W - w - 4, v.q[0] - w / 2)), y0 = hy - TH - 2 - IC / 2;
+    return { v, st, p, name, txt, w, hy, x0, y0, maxRow: Math.floor((y0 - top) / step), row: -1, on: false };
+  });
+  const xOf = (g, r) => { const yy = g.y0 - r * step; return Math.max(4, keep && yy < keep[1] && g.x0 + g.w > keep[0] ? keep[0] - g.w : g.x0); };   // minikaardi kõrgusel nihkub silt sellest vasakule
+  const busy = (g, r, gap, skip) => r < 0 || r > g.maxRow || G.some(o => o.on && o !== g && o !== skip && o.row === r && xOf(g, r) < o.x + o.tw + gap && xOf(g, r) + g.w + gap > o.x);
+  const put = (g, r) => {
+    g.row = g.st.row = r; g.on = true; g.y = g.y0 - r * step; g.x = xOf(g, r); g.tx = g.txt; g.tw = g.w;
+    if (keep && g.y < keep[1] && g.x + g.w > keep[0]) {   // ei mahu minikaardist vasakule: nimi lühemaks
+      const room = keep[0] - 8, tail = ' · ' + fmtD(g.p.d); let nm = g.name;
       while (nm.length > 3 && ctx.measureText(nm + '…' + tail).width + 8 > room) nm = nm.slice(0, -1);
-      tx = nm + '…' + tail; tw = Math.max(IC, ctx.measureText(tx).width + 8);
+      g.tx = nm + '…' + tail; g.tw = Math.max(IC, ctx.measureText(g.tx).width + 8);
     }
-    placed.push([x, y, tw, UH]); S.boxes.push([x, y, tw, UH, p.id]);
-    items.push({ p, txt: tx, x, y, w: tw, hy, qx: v.q[0], cx: Math.max(x + IC / 2, Math.min(x + tw - IC / 2, v.q[0])), up: tries > 0, isT: p === T });
+  };
+  for (const g of G) if (g.st.row >= 0 && !busy(g, g.st.row, 6)) put(g, g.st.row);   // a) kes juba real on, jääb oma reale (vanemad enne)
+  for (const g of G.filter(g => !g.on).sort((a, b) => (b.p === T) - (a.p === T) || a.p.d - b.p.d)) {   // b) uued ja reast ilma jäänud: lähemad enne, madalaim vaba rida
+    let r = 0; while (r <= g.maxRow && busy(g, r, 6)) r++;
+    if (r <= g.maxRow) { put(g, r); continue; }
+    // Ruumi ei ole. Selgelt lähem objekt (või valitud sihtmärk) võtab koha kõige kaugemalt, kes tal ees on; muidu jääb ta ootele ega hoia kohta kinni.
+    let far = null;
+    for (const o of G) if (o.on && o.p !== T && !busy(g, o.row, 6, o) && (g.p === T || (g.p.d < o.p.d - Math.max(10, 0.2 * o.p.d) && now - o.st.t > 2000)) && (!far || o.p.d > far.p.d)) far = o;
+    if (far) { far.on = false; LAB.delete(far.p.id); put(g, far.row); } else LAB.delete(g.p.id);
+  }
+  for (const g of G.filter(g => g.on && g.row > 0).sort((a, b) => a.p.d - b.p.d)) { let r = g.row; while (r > 0 && !busy(g, r - 1, 24)) r--; if (r !== g.row) put(g, r); }   // c) all on selgelt ruumi: lasku
+  for (const g of G) {
+    if (!g.on) continue;
+    S.boxes.push([g.x, g.y, g.tw, UH, g.p.id]);
+    items.push({ p: g.p, txt: g.tx, x: g.x, y: g.y, w: g.tw, hy: g.hy, qx: g.v.q[0], cx: Math.max(g.x + IC / 2, Math.min(g.x + g.tw - IC / 2, g.v.q[0])), up: g.row > 0, isT: g.p === T });
   }
   for (const it of items) {   // 2. samm: ülespoole nihutatud üksustel juhtjoon horisondi punktini
     if (!it.up && Math.abs(it.cx - it.qx) < 1) continue;
