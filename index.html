@@ -1083,6 +1083,7 @@ function drawHud(cam) {
       if (S.geoErr) rows.push([S.geoErr, 'w']);
       const poi = S.mode === 'poi';
       if (poi && S.poiErr) rows.push([S.poiErr, 'e']);
+      if (poi && S.poiLim) rows.push(['Objekte on palju: laaditud ' + fmtD(S.poiR) + ' raadiuses' + (S.truncated ? ', osa jäi välja' : ''), 'w']);
       if (poi && !OWN.ok) { if (OWN.err) rows.push([OWN.err, 'w']); }   // üksused pole veel laaditud
       else if (S.here && !S.hereGuess) {
         rows.push([S.here.id + (S.here.addr ? ' ' + S.here.addr : ''), '']);
@@ -1236,19 +1237,31 @@ function loadData() { return S.mode === 'poi' ? loadPoi() : loadParcels(); }
 async function loadPoi() {
   const p = S.fix; if (!p || S.loading) return;
   S.loading = true; S.lastTry = performance.now();
-  const o = { E: p.E, N: p.N }, r = Math.max(POI.radius, PS.range), t0 = performance.now();   // 20 km ulatusega laetakse 20 km raadiuses
+  const o = { E: p.E, N: p.N }, t0 = performance.now();
+  let r = Math.max(POI.radius, PS.range), lim = false;   // 20 km ulatusega laetakse 20 km raadiuses
   const kihid = [...new Set(POI.cats.filter(c => PS.on[c.id]).flatMap(c => c.k))];
   let list = [], err = '', truncated = false;
   if (kihid.length) {
     // CQL-is peab BBOX-il olema koordinaatsüsteem kaasas, muidu loeb GeoServer teljed vastupidi.
-    const cql = 'BBOX(shape,' + [o.E - r, o.N - r, o.E + r, o.N + r].map(v => v.toFixed(0)).join(',') + ",'EPSG:3301') AND kiht IN (" + kihid.map(k => "'" + k + "'").join(',') + ')';
-    const url = POI.wfs + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=huvipunkt:huvipunkt&outputFormat=application/json&count=' + POI.max +
-      '&propertyName=nimi,alias,alamgrupp,tyypnimi,kiht,markus,aadress,url,www,x,y,poi_id&cql_filter=' + encodeURIComponent(cql);
-    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 15000);
+    const base = POI.wfs + '?service=WFS&version=2.0.0&request=GetFeature&typeNames=huvipunkt:huvipunkt', MINR = 1250;
+    const cql = rr => '&cql_filter=' + encodeURIComponent('BBOX(shape,' + [o.E - rr, o.N - rr, o.E + rr, o.N + rr].map(v => v.toFixed(0)).join(',') + ",'EPSG:3301') AND kiht IN (" + kihid.map(k => "'" + k + "'").join(',') + ')');
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 20000);
+    const get = rr => fetch(base + '&outputFormat=application/json&count=' + POI.max + '&propertyName=nimi,alias,alamgrupp,tyypnimi,kiht,markus,aadress,url,www,x,y,poi_id' + cql(rr), { signal: ac.signal })
+      .then(x => { if (!x.ok) throw new Error('HTTP ' + x.status); return x.json(); }).then(g => { if (!g || !Array.isArray(g.features)) throw new Error('vastus ei ole GeoJSON'); return g; });
+    // Tihedas kohas (nt Tallinn, palju kihte sees) on objekte rohkem, kui üks vastus mahutab, ja vastus kärbitakse suvalisest kohast.
+    // Siis küsitakse ainult objektide arvu (väike päring) ja raadiust poolitatakse, kuni kõik mahub. JSON-vastuse numberMatched on selles teenuses alati 0, seega kärpimist näitab ainult see, et vastus on täis.
+    const fit = async () => {
+      while (r > MINR) {
+        const t = await fetch(base + '&resultType=hits' + cql(r), { signal: ac.signal }).then(x => x.text()), n = +(t.match(/numberMatched="(\d+)"/) || [])[1];
+        if (!(n > POI.max)) break;
+        r /= 2; lim = true;
+      }
+    };
     try {
-      const g = await fetch(url, { signal: ac.signal }).then(x => { if (!x.ok) throw new Error('HTTP ' + x.status); return x.json(); });
-      if (!g || !Array.isArray(g.features)) throw new Error('vastus ei ole GeoJSON');
-      truncated = g.numberMatched > g.features.length;
+      if (S.poiLim) await fit();   // eelmisel korral oli siin liiga palju objekte: enne küsitakse arvu
+      let g = await get(r);
+      if (g.features.length >= POI.max && r > MINR) { r /= 2; lim = true; await fit(); g = await get(r); }
+      truncated = g.features.length >= POI.max;
       for (const f of g.features) {
         const q = f.properties || {}, c = catOf(q), E = Number(q.x), N = Number(q.y);
         if (!c || !PS.on[c.id] || !isFinite(E) || !isFinite(N)) continue;
@@ -1262,12 +1275,12 @@ async function loadPoi() {
     } finally { clearTimeout(timer); }
   }
   if (!err) {
-    S.origin = o; S.fetchCenter = o; S.poiR = r; S.fetchMs = Math.round(performance.now() - t0); S.pois = list; S.truncated = truncated; S.tgtP = null;
+    S.origin = o; S.fetchCenter = o; S.poiR = r; S.poiLim = lim; S.fetchMs = Math.round(performance.now() - t0); S.pois = list; S.truncated = truncated; S.tgtP = null;
     S.poiN = {}; for (const q of list) S.poiN[q.cat.id] = (S.poiN[q.cat.id] || 0) + 1;
     if (!$('lay').hidden) buildLayers();
   }
   S.poiErr = err; S.loading = false;
-  if (!err && PS.range > S.poiR) loadPoi();   // ulatust suurendati laadimise ajal
+  if (!err && PS.range > S.poiR && !S.poiLim) loadPoi();   // ulatust suurendati laadimise ajal
 }
 function locatePoi() {
   if (!S.pos || !S.origin) return;
@@ -1450,7 +1463,7 @@ function setFull(v) {
 }
 function nextRange() {
   PS.range = POI.ranges[(POI.ranges.indexOf(PS.range) + 1) % POI.ranges.length]; savePoi(); say('Ulatus ' + fmtD(PS.range)); S.hudT = -1e9;
-  if (PS.range > (S.poiR || POI.radius)) loadPoi();
+  if (PS.range > (S.poiR || POI.radius) && !S.poiLim) loadPoi();
 }
 // Huvipunktide vaates näidatakse koordinaatide paneelil ka katastriüksust ja omandivormi, nagu piirimärkide vaates.
 // Selleks laetakse ainult lähiümbruse üksused (piiripunkte ei küsita); sõites laiemalt ja harvemini.
